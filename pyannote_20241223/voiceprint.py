@@ -1,3 +1,5 @@
+# 用此模型產生輸入音檔的Embeding的npy檔
+
 import os
 import numpy as np
 from pyannote.audio import Model
@@ -14,8 +16,12 @@ if not HUGGINGFACE_TOKEN:
 model = Model.from_pretrained("pyannote/embedding", use_auth_token=HUGGINGFACE_TOKEN)
 
 # Step 2: 載入音訊檔案
-audio_file = "audioFile/1-1.wav"  # 音訊檔案
+audio_file = "audioFile/2-2.wav"  # 音訊檔案
 waveform, sample_rate = torchaudio.load(audio_file)
+
+if sample_rate != 16000:
+    waveform = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform)
+
 
 # Step 3: 定義要處理的音訊片段
 start_time = 0
@@ -32,7 +38,7 @@ waveform_segment = waveform_segment.unsqueeze(0)  # 添加批次維度
 
 # Step 4: 提取該片段的聲紋嵌入向量
 embedding = model(waveform_segment)
-embedding_vector = embedding.detach().numpy().flatten()  # 壓平為 1-D
+embedding_vector = embedding.detach().numpy().reshape(-1)  # 壓平為 1-D
 
 # Step 5: 自動檢查目標資料夾並生成新檔名
 output_dir = "vectorFile"

@@ -1,8 +1,9 @@
+# 測歐基里德距離
+
 import os
 import numpy as np
 from pyannote.audio import Model
 import torchaudio
-from scipy.spatial.distance import cosine
 from numpy.linalg import norm
 from dotenv import load_dotenv
 
@@ -28,10 +29,14 @@ for vector_file in vector_files:
     vectors.append((vector_file, np.load(vector_path)))
 
 # Step 3: 提取新的音訊嵌入
-new_audio_file = "audioFile/1-2.wav"   # 新的音訊檔案
-waveform, sample_rate = torchaudio.load(new_audio_file)
+new_audio_file = "audioFile/1-1.wav"
+if not os.path.exists(new_audio_file):
+    raise FileNotFoundError(f"File not found: {new_audio_file}")
 
-# 提取片段
+waveform, sample_rate = torchaudio.load(new_audio_file)
+if sample_rate != 16000:
+    waveform = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform)
+
 start_time = 0
 end_time = 10
 start_sample = int(start_time * sample_rate)
@@ -42,7 +47,6 @@ if waveform_segment.shape[0] > 1:
     waveform_segment = waveform_segment.mean(dim=0)
 
 waveform_segment = waveform_segment.unsqueeze(0)
-new_embedding = model(waveform_segment).detach().numpy()
 
 # 提取嵌入
 new_embedding = model(waveform_segment).detach().numpy().flatten()
