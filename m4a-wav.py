@@ -1,8 +1,8 @@
 from pydub import AudioSegment
 
 # 設定檔案路徑
-input_file = "audioFile/1-4.wav"  # 輸入的 m4a 檔案
-output_file = "audioFile/1-4.wav"  # 輸出的 wav 檔案
+input_file = "audioFile/4-0.m4a"  # 輸入的 m4a 檔案
+output_file = "audioFile/4-0.wav"  # 輸出的 wav 檔案
 
 # 使用 pydub 加載音訊並轉換格式
 audio = AudioSegment.from_file(input_file, format="m4a")

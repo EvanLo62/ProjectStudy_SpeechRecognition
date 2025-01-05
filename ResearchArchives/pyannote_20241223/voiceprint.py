@@ -41,7 +41,7 @@ embedding = model(waveform_segment)
 embedding_vector = embedding.detach().numpy().reshape(-1)  # 壓平為 1-D
 
 # Step 5: 自動檢查目標資料夾並生成新檔名
-output_dir = "vectorFile"
+output_dir = "ResearchArchives/vectorFile_test"
 os.makedirs(output_dir, exist_ok=True)  # 確保資料夾存在
 
 # 找到目前的檔案數量

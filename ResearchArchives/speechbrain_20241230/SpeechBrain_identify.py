@@ -98,6 +98,6 @@ def main(new_audio_file, embedding_dir, threshold):
 # 範例執行
 if __name__ == "__main__":
     new_audio_file = "audioFile/1-4.wav"  # 新的音檔路徑
-    embedding_dir = "vectorFile"  # 嵌入向量存放資料夾
+    embedding_dir = "ResearchArchives/vectorFile_test"  # 嵌入向量存放資料夾
     threshold = 0.8  # 歐幾里得距離閾值
     main(new_audio_file, embedding_dir, threshold)

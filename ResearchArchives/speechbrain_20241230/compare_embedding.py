@@ -21,8 +21,8 @@ except ImportError:
     print("SpeechBrain 未正確安裝，請運行: pip install speechbrain")
     exit()
 
-EMBEDDING_DIR = "vectorFile"
-THRESHOLD = 0.4  # 餘弦距離門檻 (可自行調整)
+EMBEDDING_DIR = "ResearchArchives/vectorFile_test"
+THRESHOLD = 0.5  # 餘弦距離門檻 (可自行調整)
 
 def extract_embedding(audio_path, normalize=False):
     """
@@ -101,5 +101,5 @@ def main(audio_file):
         print(f"\n[Result] No match found! (best distance={best_distance:.4f} > threshold={THRESHOLD})")
 
 if __name__ == "__main__":
-    test_audio_file = "audioFile/1-3.wav"
+    test_audio_file = "audioFile/1-4.wav"
     main(test_audio_file)

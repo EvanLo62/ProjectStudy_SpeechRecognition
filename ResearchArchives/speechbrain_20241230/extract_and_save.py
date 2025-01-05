@@ -23,7 +23,7 @@ except ImportError:
     exit()
 
 # 全域參數
-EMBEDDING_DIR = "vectorFile"
+EMBEDDING_DIR = "ResearchArchives/vectorFile_test"
 
 def extract_embedding(audio_path, normalize=False):
     """
@@ -81,5 +81,5 @@ def main(audio_file):
 
 if __name__ == "__main__":
     # 你要處理的音檔 (可自行修改)
-    new_audio_file = "audioFile/2-2.wav"
+    new_audio_file = "audioFile/1-1.wav"
     main(new_audio_file)
