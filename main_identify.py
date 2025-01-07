@@ -36,6 +36,7 @@ import string
 import numpy as np
 import torch
 import torchaudio
+import soundfile # torchaudio套件需要
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 import warnings
