@@ -1,16 +1,60 @@
+"""
+語音辨識 檔案介紹
+
+    使用方式: 
+        呼叫process_audio_file(audio_file)函式，audio_file須為wav檔，程式會抓前10秒聲音進行判斷
+
+        在此檔案最下方的242行，是程式使用的範例，可以直接更改使用
+    
+    產生結果:
+        1. 新音檔會與資料夾裡的每個已保存的嵌入向量檔，產生各自的餘弦距離
+        2. 如果找出距離夠近的檔案(在設定閾值內)，就判斷為與此檔案是同一個人的聲音
+
+        如果與現有的向量都距離太遠，就會判斷為是新的人，並儲存成新的未命名向量檔案
+        (新檔案前半段的檔名可改為人名)
+
+        
+    51~56行: 設定儲存嵌入向量的資料夾位置，以及聲音距離的閾值設定
+
+    嵌入向量檔案命名規則:
+        新檔案名稱: n1xx_2.npy
+            n: 開頭n的檔案為新的人，新增加的陌生聲音還未命名此人是誰，所以代表是未命名檔案
+            1: 未命名檔案的序號，假設當前有n1xx, n2xx, n4xx，下一個新建的未命名檔案為n5xx
+            xx: 隨機的兩位小寫字母，所以可能會是rn或gs等等  (一開始是怕未命名檔案n+序號在改名之後新檔案可能會撞到名稱，現在改善後並不會衝突，因此是可以刪掉這隨機兩位功能)
+            _: 底線是做區隔，底線前的可以隨意更改改為人名，像是A、B、C等等
+            2: 數字用來代表做了幾次加權移動平均，因此數字會隨更新次數而增加 (目前設計是更新嵌入向量時會+1，且對現有的嵌入向量檔案做平均)
+
+        自由命名檔名: 小明_2.npy, David_6.npy
+            可以把_底線前面的檔名做更動
+            !底線與後方數字一定要有，且數字不建議自由更改!
+"""
+
 import os
 import random
+import re
 import string
 import numpy as np
 import torch
 import torchaudio
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
-from speechbrain.pretrained import SpeakerRecognition
 import warnings
+import logging
 
-# 忽略不必要的警告訊息，保持輸出整潔
+# 隱藏多餘的警告和日誌
 warnings.filterwarnings("ignore")
+logging.getLogger("speechbrain").setLevel(logging.ERROR)
+
+# 導入模型
+from speechbrain.inference import SpeakerRecognition
+
+# 嵌入向量存放的目錄
+EMBEDDING_DIR = "embeddingFiles"
+# 設定距離閾值
+THRESHOLD_LOW = 0.25  # 過於相似的閾值，小於此值的嵌入向量不更新
+THRESHOLD_UPDATE = 0.43  # 進行更新的最大距離閾值
+THRESHOLD_NEW = 0.54  # 超過此距離，視為新說話者
+
 
 # 嘗試載入 SpeechBrain 語音辨識模型
 try:
@@ -23,15 +67,8 @@ except ImportError:
     print("SpeechBrain 未正確安裝，請運行: pip install speechbrain")
     exit()
 
-# 嵌入向量存放的目錄
-EMBEDDING_DIR = "vectorFile"
-# 設定距離閾值
-THRESHOLD_LOW = 0.2  # 過於相似的閾值，小於此值的嵌入向量不更新
-THRESHOLD_UPDATE = 0.4  # 進行更新的最大距離閾值
-THRESHOLD_NEW = 0.55  # 超過此距離，視為新說話者
 
-
-def extract_embedding(audio_path, normalize=False):
+def extract_embedding(audio_path):
     """
     從音檔中提取語音嵌入向量 (embedding)。
     - 限制音檔的最大長度為 10 秒。
@@ -61,10 +98,6 @@ def extract_embedding(audio_path, normalize=False):
 
     # 使用 SpeechBrain 模型提取嵌入向量
     embedding = model.encode_batch(signal).squeeze().numpy()
-
-    # 如果需要，對嵌入向量進行歸一化
-    if normalize:
-        embedding = embedding / norm(embedding)
 
     return embedding
 
@@ -127,18 +160,34 @@ def update_embedding(old_embedding, new_embedding, n_samples):
     updated_embedding = (old_embedding * n_samples + new_embedding) / (n_samples + 1)
     return updated_embedding, n_samples + 1
 
-def generate_unique_filename():
+def generate_unique_filename(directory):
     """
-    生成新人的檔名
-    隨機生成三位字母組合並確保唯一性
+    根據資料夾中的檔案，生成新檔名：
+    - 開頭為 'n'，接著數字遞增。
+    - 後面接兩位隨機小寫英文字母。
     """
-    while True:
-        # 隨機生成兩個大寫字母
-        random_name = ''.join(random.choices(string.ascii_uppercase, k=3))
-        # 檢查是否已經有這個名稱的檔案
-        existing_files = [f for f in os.listdir(EMBEDDING_DIR) if f.startswith(f"n{random_name}")]
-        if not existing_files:
-            return f"n{random_name}"
+    
+    # 獲取資料夾中所有以 'n' 開頭且是 `.npy` 的檔案
+    files = [f for f in os.listdir(directory) if f.startswith('n') and f.endswith('.npy')]
+
+    # 提取檔案名稱中的數字部分，忽略後綴和其他非數字部分
+    numbers = []
+    for f in files:
+        parts = f.split('_')[0]  # 取檔名 "_" 前的部分
+        # 使用正規表達式提取前面的數字
+        match = re.search(r'(\d+)', parts)
+        if match:
+            numbers.append(int(match.group(1)))  # 提取的數字轉為整數並加入到 numbers 列表中
+            # print(match.group(1))
+
+    # 確定新檔案的數字部分
+    next_number = max(numbers, default=0) + 1
+
+    # 生成隨機小寫字母後綴
+    random_suffix = ''.join(random.choices(string.ascii_lowercase, k=2))
+
+    # 返回新檔案名稱
+    return f"n{next_number}{random_suffix}"
 
 
 def process_audio_file(audio_file):
@@ -151,6 +200,12 @@ def process_audio_file(audio_file):
     audio_file (str): 音檔的路徑
     """
     print(f"\nProcessing file: {audio_file}")  # 測試用，顯示導入的音檔名稱
+    # 檢查檔案是否存在
+    if not os.path.exists(audio_file):
+        print(f"File {audio_file} does not exist. Cancel.")
+        return  # 如果檔案不存在，就取消
+
+    # 建立新音檔嵌入向量
     new_embedding = extract_embedding(audio_file)
     
     # 比較新嵌入與現有嵌入向量
@@ -159,6 +214,7 @@ def process_audio_file(audio_file):
     if best_distance < THRESHOLD_LOW:
         # 如果距離小於低閾值，視為過於相似，跳過更新
         print(f"Embedding too similar (distance = {best_distance:.4f}), skipping update.")
+        print(f"此音檔與{match_file}是同一個人")
     elif best_distance < THRESHOLD_UPDATE:
         # 距離在合理範圍內，進行嵌入更新
         old_embedding = np.load(os.path.join(EMBEDDING_DIR, match_file))
@@ -173,13 +229,15 @@ def process_audio_file(audio_file):
     elif best_distance < THRESHOLD_NEW:
         # 距離接近匹配但不更新
         print(f"Matched with {match_file}, but no update performed (distance = {best_distance:.4f}).")
+        print(f"此音檔與{match_file}是同一個人")
     else:
         # 如果距離超過新說話者閾值，新增新檔案
-        new_filename = f"{generate_unique_filename()}_1.npy"
+        new_filename = f"{generate_unique_filename(EMBEDDING_DIR)}_1.npy"
         np.save(os.path.join(EMBEDDING_DIR, new_filename), new_embedding)
         print(f"New speaker detected, saved as: {new_filename}")
+        print(f"發現新的人，將此聲音保存至{new_filename}資料")
 
 
 if __name__ == "__main__":
-    test_audio_file = "audioFile/4-0.wav"  # 測試用音檔路徑
+    test_audio_file = "audioFile/11.wav"  # 新音檔路徑
     process_audio_file(test_audio_file)

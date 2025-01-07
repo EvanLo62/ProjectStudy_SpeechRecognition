@@ -56,20 +56,6 @@ all_vectors = [saved_vector for _, saved_vector in vectors]
 all_vectors.append(new_embedding)
 labels = [vector_file for vector_file, _ in vectors] + ["New"]  # 使用檔案名稱作為標籤
 
-# # PCA 降維到 2D
-# pca = PCA(n_components=2)
-# reduced_vectors = pca.fit_transform(all_vectors)
-
-# # 繪製散點圖
-# plt.figure(figsize=(8, 6))
-# plt.scatter(reduced_vectors[:, 0], reduced_vectors[:, 1], c='blue', alpha=0.7)
-# for i, label in enumerate(labels):
-#     plt.annotate(label, (reduced_vectors[i, 0], reduced_vectors[i, 1]))
-# plt.title("Embedding Distribution")
-# plt.xlabel("PCA Component 1")
-# plt.ylabel("PCA Component 2")
-# plt.grid(True)
-# plt.show()
 
 # PCA 降維到 3D
 pca = PCA(n_components=3)
