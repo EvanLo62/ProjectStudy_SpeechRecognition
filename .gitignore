@@ -1,3 +1,6 @@
 venv_speech
 .env
 audioFile
+output_log.txt
+S0755
+S0908
