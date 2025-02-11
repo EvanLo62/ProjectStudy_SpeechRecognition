@@ -1,34 +1,3 @@
-"""
-語音辨識 檔案介紹
-
-    使用方式: 
-        呼叫process_audio_file(audio_file)函式，audio_file須為wav檔，程式會抓前10秒聲音進行判斷
-
-        在此檔案最下方的242行，是程式使用的範例，可以直接更改使用
-    
-    產生結果:
-        1. 新音檔會與資料夾裡的每個已保存的嵌入向量檔，產生各自的餘弦距離
-        2. 如果找出距離夠近的檔案(在設定閾值內)，就判斷為與此檔案是同一個人的聲音
-
-        如果與現有的向量都距離太遠，就會判斷為是新的人，並儲存成新的未命名向量檔案
-        (新檔案前半段的檔名可改為人名)
-
-        
-    51~56行: 設定儲存嵌入向量的資料夾位置，以及聲音距離的閾值設定
-
-    嵌入向量檔案命名規則:
-        新檔案名稱: n1xx_2.npy
-            n: 開頭n的檔案為新的人，新增加的陌生聲音還未命名此人是誰，所以代表是未命名檔案
-            1: 未命名檔案的序號，假設當前有n1xx, n2xx, n4xx，下一個新建的未命名檔案為n5xx
-            xx: 隨機的兩位小寫字母，所以可能會是rn或gs等等  (一開始是怕未命名檔案n+序號在改名之後新檔案可能會撞到名稱，現在改善後並不會衝突，因此是可以刪掉這隨機兩位功能)
-            _: 底線是做區隔，底線前的可以隨意更改改為人名，像是A、B、C等等
-            2: 數字用來代表做了幾次加權移動平均，因此數字會隨更新次數而增加 (目前設計是更新嵌入向量時會+1，且對現有的嵌入向量檔案做平均)
-
-        自由命名檔名: 小明_2.npy, David_6.npy
-            可以把_底線前面的檔名做更動
-            !底線與後方數字一定要有，且數字不建議自由更改!
-"""
-
 import os
 import random
 import re
@@ -42,7 +11,6 @@ from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 import warnings
 import logging
-import subprocess  # 引入 subprocess 模組來呼叫 ffmpeg
 
 # 隱藏多餘的警告和日誌
 warnings.filterwarnings("ignore")
@@ -71,15 +39,15 @@ from speechbrain.inference import SpeakerRecognition
 # 嵌入向量存放的目錄
 EMBEDDING_DIR = "embeddingFiles"
 # 設定距離閾值
-THRESHOLD_LOW = 0.2  # 過於相似的閾值，小於此值的嵌入向量不更新
-THRESHOLD_UPDATE = 0.34  # 進行更新的最大距離閾值
-THRESHOLD_NEW = 0.36  # 超過此距離，視為新說話者
+THRESHOLD_LOW = 0.18  # 過於相似的閾值，小於此值的嵌入向量不更新
+THRESHOLD_UPDATE = 0.26  # 進行更新的最大距離閾值
+THRESHOLD_NEW = 0.3  # 超過此距離，視為新說話者
 
 
 # 嘗試載入 SpeechBrain 語音辨識模型
 try:
     model = SpeakerRecognition.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb",  # SpeechBrain 預訓練模型的來源
+        source="speechbrain/spkrec-resnet-voxceleb",  # SpeechBrain 預訓練模型的來源
         savedir="models/speechbrain_recognition"     # 模型儲存的路徑
     )
     print("SpeechBrain 模型加載成功！")
@@ -88,54 +56,46 @@ except ImportError:
     exit()
 
 
-def resample_with_ffmpeg(input_path, output_path, target_sr):
-    """
-    使用 ffmpeg 重新採樣音訊
-    """
-    # 使用 subprocess.run 呼叫 ffmpeg 來進行音訊重新採樣
-    subprocess.run([
-        "ffmpeg", "-y", "-i", input_path, "-ar", str(target_sr),"-ac", "1", output_path
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # 靜默輸出，不顯示任何資訊
-
 def extract_embedding(audio_path):
     """
     從音檔中提取語音嵌入向量 (embedding)。
     - 限制音檔的最大長度為 10 秒。
-    - 先將音訊降頻到 8kHz，再升頻回 16kHz。
+    - 將音訊轉換為單聲道，並以 16kHz 取樣。
 
     參數:
     audio_path (str): 音檔的路徑
+    normalize (bool): 是否對向量進行歸一化
 
     回傳:
     np.ndarray: 提取的語音嵌入向量
     """
-    temp_8k_path = "temp_8k.wav"  # 8kHz 音訊檔案的暫存路徑
-    temp_16k_path = "temp_16k.wav"  # 16kHz 音訊檔案的暫存路徑
-    
-    # 降頻到 8kHz
-    resample_with_ffmpeg(audio_path, temp_8k_path, target_sr=8000)
-    
-    # 再升頻到 16kHz
-    resample_with_ffmpeg(temp_8k_path, temp_16k_path, target_sr=16000)
-    
-    # 讀取 16kHz 音檔
-    signal, fs = torchaudio.load(temp_16k_path)
-    
+    # 加載音訊檔案，返回信號和取樣率
+    signal, fs = torchaudio.load(audio_path)
+
     # 限制音訊檔案的最大長度（10 秒）
-    max_length = fs * 10  # 計算 10 秒對應的樣本數
-    signal = signal[:, :max_length] if signal.shape[1] > max_length else signal  # 如果長度超過 10 秒，截取前 10 秒
-    
-    # print(f"Final sampling rate: {fs}, shape: {signal.shape}")  # 顯示最終的取樣率和音訊的形狀
-    
+    max_length = fs * 10
+    signal = signal[:, :max_length] if signal.shape[1] > max_length else signal
+
+    # 如果是多聲道音訊，將其轉換為單聲道
+    if signal.shape[0] > 1:
+        signal = torch.mean(signal, dim=0, keepdim=True)
+
+    # 如果取樣率不是 16kHz，進行重取樣
+    if fs != 16000:
+        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(signal)
+
+    # 如果取樣率不是 8kHz，進行重取樣  (測試發現完全不適合8kHz)
+    if fs != 8000:
+        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=8000)(signal)
+
+    # 如果取樣率不是 16kHz，進行重取樣
+    if fs != 16000:
+        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(signal)
+
     # 使用 SpeechBrain 模型提取嵌入向量
     embedding = model.encode_batch(signal).squeeze().numpy()
-    
-    # # 清理暫存檔案
-    # os.remove(temp_8k_path)  # 刪除 8kHz 音訊檔案
-    # os.remove(temp_16k_path)  # 刪除 16kHz 音訊檔案
-    
-    return embedding  # 回傳提取的語音嵌入向量
 
+    return embedding
 
 
 def compare_all_npy(new_embedding):
@@ -307,10 +267,10 @@ def process_audio_directory(directory):
 
 
 if __name__ == "__main__":
-    test_audio_file = "audiofile/11.wav"  # 新音檔路徑
+    test_audio_file = "audioFile/2-1.wav"  # 新音檔路徑
     process_audio_file(test_audio_file)
     print()
 
-    # test_directory = "test_audioFile/0915"  # 測試資料夾路徑
+    # test_directory = "test_audioFile/0770"  # 測試資料夾路徑
     # process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
     # print()
