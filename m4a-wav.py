@@ -1,7 +1,7 @@
 from pydub import AudioSegment
 
 # 設定檔案路徑
-name = "5-2"
+name = "test20250224/t3_s2"
 input_file = f"{name}.m4a"  # 輸入的 m4a 檔案
 output_file = f"{name}.wav"  # 輸出的 wav 檔案
 

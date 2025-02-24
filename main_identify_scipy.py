@@ -1,3 +1,35 @@
+"""
+(用Scripy做重新採樣，從8kHz升到16kHz。)
+語音辨識 檔案介紹
+
+    使用方式: 
+        呼叫process_audio_file(audio_file)函式，audio_file須為wav檔，程式會抓前10秒聲音進行判斷
+
+        在此檔案最下方的280行，是程式使用的範例，可以直接更改使用
+    
+    產生結果:
+        1. 新音檔會與資料夾裡的每個已保存的嵌入向量檔，產生各自的餘弦距離
+        2. 如果找出距離夠近的檔案(在設定閾值內)，就判斷為與此檔案是同一個人的聲音
+
+        如果與現有的向量都距離太遠，就會判斷為是新的人，並儲存成新的未命名向量檔案
+        (新檔案前半段的檔名可改為人名)
+
+        
+    73行: 設定儲存嵌入向量的資料夾位置，以及聲音距離的閾值設定
+
+    嵌入向量檔案命名規則:
+        新檔案名稱: n1xx_2.npy
+            n: 開頭n的檔案為新的人，新增加的陌生聲音還未命名此人是誰，所以代表是未命名檔案
+            1: 未命名檔案的序號，假設當前有n1xx, n2xx, n4xx，下一個新建的未命名檔案為n5xx
+            xx: 隨機的兩位小寫字母，所以可能會是rn或gs等等  (一開始是怕未命名檔案n+序號在改名之後新檔案可能會撞到名稱，現在改善後並不會衝突，因此是可以刪掉這隨機兩位功能)
+            _: 底線是做區隔，底線前的可以隨意更改改為人名，像是A、B、C等等
+            2: 數字用來代表做了幾次加權移動平均，因此數字會隨更新次數而增加 (目前設計是更新嵌入向量時會+1，且對現有的嵌入向量檔案做平均)
+
+        自由命名檔名: 小明_2.npy, David_6.npy
+            可以把_底線前面的檔名做更動
+            !底線與後方數字一定要有，且數字不建議自由更改!
+"""
+
 import os
 import random
 import re
@@ -6,11 +38,13 @@ import sys
 import numpy as np
 import torch
 import torchaudio
-import soundfile # torchaudio套件需要
+import soundfile as sf # torchaudio套件需要
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
+from scipy.signal import resample_poly
 import warnings
 import logging
+import subprocess  # 引入 subprocess 模組來呼叫 ffmpeg
 
 # 隱藏多餘的警告和日誌
 warnings.filterwarnings("ignore")
@@ -39,15 +73,15 @@ from speechbrain.inference import SpeakerRecognition
 # 嵌入向量存放的目錄
 EMBEDDING_DIR = "embeddingFiles"
 # 設定距離閾值
-THRESHOLD_LOW = 0.18  # 過於相似的閾值，小於此值的嵌入向量不更新
-THRESHOLD_UPDATE = 0.26  # 進行更新的最大距離閾值
-THRESHOLD_NEW = 0.3  # 超過此距離，視為新說話者
+THRESHOLD_LOW = 0.2  # 過於相似的閾值，小於此值的嵌入向量不更新
+THRESHOLD_UPDATE = 0.34  # 進行更新的最大距離閾值
+THRESHOLD_NEW = 0.36  # 超過此距離，視為新說話者
 
 
 # 嘗試載入 SpeechBrain 語音辨識模型
 try:
     model = SpeakerRecognition.from_hparams(
-        source="speechbrain/spkrec-resnet-voxceleb",  # SpeechBrain 預訓練模型的來源
+        source="speechbrain/spkrec-ecapa-voxceleb",  # SpeechBrain 預訓練模型的來源
         savedir="models/speechbrain_recognition"     # 模型儲存的路徑
     )
     print("SpeechBrain 模型加載成功！")
@@ -55,48 +89,43 @@ except ImportError:
     print("SpeechBrain 未正確安裝，請運行: pip install speechbrain")
     exit()
 
+def resample_audio(signal, orig_sr, target_sr):
+    """
+    使用 scipy.signal.resample_poly 進行高品質重新採樣。
+    """
+    up = target_sr
+    down = orig_sr
+    return resample_poly(signal, up, down)
+
 
 def extract_embedding(audio_path):
     """
     從音檔中提取語音嵌入向量 (embedding)。
     - 限制音檔的最大長度為 10 秒。
-    - 將音訊轉換為單聲道，並以 16kHz 取樣。
-
-    參數:
-    audio_path (str): 音檔的路徑
-    normalize (bool): 是否對向量進行歸一化
-
-    回傳:
-    np.ndarray: 提取的語音嵌入向量
+    - 先將音訊降頻到 8kHz，再升頻回 16kHz。
     """
-    # 加載音訊檔案，返回信號和取樣率
-    signal, fs = torchaudio.load(audio_path)
+    # 讀取原始音檔
+    signal, sr = sf.read(audio_path)
+    if signal.ndim > 1:
+        signal = signal.mean(axis=1)  # 若為多聲道，轉為單聲道
 
+    # 降頻到 8kHz
+    signal_8k = resample_audio(signal, sr, 8000)
+    
+    # 再升頻到 16kHz
+    signal_16k = resample_audio(signal_8k, 8000, 16000)
+    
+    # 轉換為 PyTorch 張量
+    signal_16k = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
+    
     # 限制音訊檔案的最大長度（10 秒）
-    max_length = fs * 10
-    signal = signal[:, :max_length] if signal.shape[1] > max_length else signal
-
-    # 如果是多聲道音訊，將其轉換為單聲道
-    if signal.shape[0] > 1:
-        signal = torch.mean(signal, dim=0, keepdim=True)
-
-    # 如果取樣率不是 16kHz，進行重取樣
-    if fs != 16000:
-        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(signal)
-
-    # 如果取樣率不是 8kHz，進行重取樣  (測試發現完全不適合8kHz)
-    if fs != 8000:
-        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=8000)(signal)
-
-    # 如果取樣率不是 16kHz，進行重取樣
-    if fs != 16000:
-        signal = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)(signal)
+    max_length = 16000 * 10  # 10 秒的樣本數
+    signal_16k = signal_16k[:, :max_length] if signal_16k.shape[1] > max_length else signal_16k
 
     # 使用 SpeechBrain 模型提取嵌入向量
-    embedding = model.encode_batch(signal).squeeze().numpy()
-
+    embedding = model.encode_batch(signal_16k).squeeze().numpy()
+    
     return embedding
-
 
 def compare_all_npy(new_embedding):
     """
@@ -163,28 +192,11 @@ def generate_unique_filename(directory):
     - 開頭為 'n'，接著數字遞增。
     - 後面接兩位隨機小寫英文字母。
     """
-    
-    # 獲取資料夾中所有以 'n' 開頭且是 `.npy` 的檔案
-    files = [f for f in os.listdir(directory) if f.startswith('n') and f.endswith('.npy')]
-
-    # 提取檔案名稱中的數字部分，忽略後綴和其他非數字部分
-    numbers = []
-    for f in files:
-        parts = f.split('_')[0]  # 取檔名 "_" 前的部分
-        # 使用正規表達式提取前面的數字
-        match = re.search(r'(\d+)', parts)
-        if match:
-            numbers.append(int(match.group(1)))  # 提取的數字轉為整數並加入到 numbers 列表中
-            # print(match.group(1))
-
-    # 確定新檔案的數字部分
-    next_number = max(numbers, default=0) + 1
-
-    # 生成隨機小寫字母後綴
+    existing_numbers = {int(re.search(r'n(\d+)', f).group(1)) for f in os.listdir(directory) if f.startswith("n") and f.endswith(".npy")}
+    next_number = (max(existing_numbers) + 1) if existing_numbers else 1
     random_suffix = ''.join(random.choices(string.ascii_lowercase, k=2))
-
-    # 返回新檔案名稱
     return f"n{next_number}{random_suffix}"
+
 
 
 def process_audio_file(audio_file):
@@ -267,10 +279,10 @@ def process_audio_directory(directory):
 
 
 if __name__ == "__main__":
-    test_audio_file = "audioFile/2-1.wav"  # 新音檔路徑
+    test_audio_file = "test20250224/t3_s2.wav"  # 新音檔路徑
     process_audio_file(test_audio_file)
     print()
 
-    # test_directory = "test_audioFile/0770"  # 測試資料夾路徑
+    # test_directory = "test_audioFile/0009"  # 測試資料夾路徑
     # process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
     # print()

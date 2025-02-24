@@ -1,10 +1,11 @@
 """
+(用FFmpeg做重新採樣，從8kHz升到16kHz。 建議用main_identify_scipy的scipy版本，實測似乎準一點點)
 語音辨識 檔案介紹
 
     使用方式: 
         呼叫process_audio_file(audio_file)函式，audio_file須為wav檔，程式會抓前10秒聲音進行判斷
 
-        在此檔案最下方的242行，是程式使用的範例，可以直接更改使用
+        在此檔案最下方的280行，是程式使用的範例，可以直接更改使用
     
     產生結果:
         1. 新音檔會與資料夾裡的每個已保存的嵌入向量檔，產生各自的餘弦距離
@@ -14,7 +15,7 @@
         (新檔案前半段的檔名可改為人名)
 
         
-    51~56行: 設定儲存嵌入向量的資料夾位置，以及聲音距離的閾值設定
+    73行: 設定儲存嵌入向量的資料夾位置，以及聲音距離的閾值設定
 
     嵌入向量檔案命名規則:
         新檔案名稱: n1xx_2.npy
@@ -87,21 +88,29 @@ except ImportError:
     print("SpeechBrain 未正確安裝，請運行: pip install speechbrain")
     exit()
 
-
 def resample_with_ffmpeg(input_path, output_path, target_sr):
     """
     使用 ffmpeg 重新採樣音訊
     """
-    # 使用 subprocess.run 呼叫 ffmpeg 來進行音訊重新採樣
-    subprocess.run([
-        "ffmpeg", "-y", "-i", input_path, "-ar", str(target_sr),"-ac", "1", output_path
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # 靜默輸出，不顯示任何資訊
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y", "-i", input_path, "-ar", str(target_sr), "-ac", "1", output_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)   # 靜默輸出，不顯示任何資訊
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {result.stderr.decode()}")
+
+    except Exception as e:
+        print(f"Error resampling audio: {e}")
+        return False
+    return True
+
 
 def extract_embedding(audio_path):
     """
     從音檔中提取語音嵌入向量 (embedding)。
     - 限制音檔的最大長度為 10 秒。
-    - 先將音訊降頻到 8kHz，再升頻回 16kHz。
+    - 先將音訊重新採樣到16kHz。
 
     參數:
     audio_path (str): 音檔的路徑
@@ -109,6 +118,32 @@ def extract_embedding(audio_path):
     回傳:
     np.ndarray: 提取的語音嵌入向量
     """
+
+    # temp_16k_path = "temp_16k.wav"  # 16kHz 音訊檔案的暫存路徑
+    
+    # # 重新採樣到 16kHz
+    # check = resample_with_ffmpeg(audio_path, temp_16k_path, target_sr=16000)
+    # if check != True:
+    #     print("音檔重新採樣錯誤")
+    #     exit
+    
+    # # 讀取 16kHz 音檔
+    # signal, fs = torchaudio.load(temp_16k_path)
+    
+    # # 限制音訊檔案的最大長度（10 秒）
+    # max_length = fs * 10  # 計算 10 秒對應的樣本數
+    # signal = signal[:, :max_length] if signal.shape[1] > max_length else signal  # 如果長度超過 10 秒，截取前 10 秒
+    
+    # # print(f"Final sampling rate: {fs}, shape: {signal.shape}")  # 顯示最終的取樣率和音訊的形狀
+    
+    # # 使用 SpeechBrain 模型提取嵌入向量
+    # embedding = model.encode_batch(signal).squeeze().numpy()
+    
+    # # # 清理暫存檔案
+    # os.remove(temp_16k_path)  # 刪除 16kHz 音訊檔案
+    
+    # return embedding  # 回傳提取的語音嵌入向量
+
     temp_8k_path = "temp_8k.wav"  # 8kHz 音訊檔案的暫存路徑
     temp_16k_path = "temp_16k.wav"  # 16kHz 音訊檔案的暫存路徑
     
@@ -124,8 +159,7 @@ def extract_embedding(audio_path):
     # 限制音訊檔案的最大長度（10 秒）
     max_length = fs * 10  # 計算 10 秒對應的樣本數
     signal = signal[:, :max_length] if signal.shape[1] > max_length else signal  # 如果長度超過 10 秒，截取前 10 秒
-    
-    # print(f"Final sampling rate: {fs}, shape: {signal.shape}")  # 顯示最終的取樣率和音訊的形狀
+
     
     # 使用 SpeechBrain 模型提取嵌入向量
     embedding = model.encode_batch(signal).squeeze().numpy()
@@ -203,28 +237,11 @@ def generate_unique_filename(directory):
     - 開頭為 'n'，接著數字遞增。
     - 後面接兩位隨機小寫英文字母。
     """
-    
-    # 獲取資料夾中所有以 'n' 開頭且是 `.npy` 的檔案
-    files = [f for f in os.listdir(directory) if f.startswith('n') and f.endswith('.npy')]
-
-    # 提取檔案名稱中的數字部分，忽略後綴和其他非數字部分
-    numbers = []
-    for f in files:
-        parts = f.split('_')[0]  # 取檔名 "_" 前的部分
-        # 使用正規表達式提取前面的數字
-        match = re.search(r'(\d+)', parts)
-        if match:
-            numbers.append(int(match.group(1)))  # 提取的數字轉為整數並加入到 numbers 列表中
-            # print(match.group(1))
-
-    # 確定新檔案的數字部分
-    next_number = max(numbers, default=0) + 1
-
-    # 生成隨機小寫字母後綴
+    existing_numbers = {int(re.search(r'n(\d+)', f).group(1)) for f in os.listdir(directory) if f.startswith("n") and f.endswith(".npy")}
+    next_number = (max(existing_numbers) + 1) if existing_numbers else 1
     random_suffix = ''.join(random.choices(string.ascii_lowercase, k=2))
-
-    # 返回新檔案名稱
     return f"n{next_number}{random_suffix}"
+
 
 
 def process_audio_file(audio_file):
@@ -307,10 +324,10 @@ def process_audio_directory(directory):
 
 
 if __name__ == "__main__":
-    test_audio_file = "audiofile/11.wav"  # 新音檔路徑
-    process_audio_file(test_audio_file)
-    print()
-
-    # test_directory = "test_audioFile/0915"  # 測試資料夾路徑
-    # process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
+    # test_audio_file = "audiofile/2-0.wav"  # 新音檔路徑
+    # process_audio_file(test_audio_file)
     # print()
+
+    test_directory = "test_audioFile/0009"  # 測試資料夾路徑
+    process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
+    print()

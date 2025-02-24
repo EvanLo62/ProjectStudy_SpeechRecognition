@@ -15,6 +15,7 @@ networkx==3.4.2
 numpy==2.2.1
 packaging==24.2
 pycparser==2.22
+pydub==0.25.1
 PyYAML==6.0.2
 requests==2.32.3
 ruamel.yaml==0.18.10
@@ -30,3 +31,4 @@ torchaudio==2.5.1
 tqdm==4.67.1
 typing_extensions==4.12.2
 urllib3==2.3.0
+watchdog==6.0.0
