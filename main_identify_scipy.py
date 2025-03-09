@@ -279,7 +279,7 @@ def process_audio_directory(directory):
 
 
 if __name__ == "__main__":
-    test_audio_file = "test20250224/t3_s2.wav"  # 新音檔路徑
+    test_audio_file = "test_audioFile/0363/363-1.wav"  # 新音檔路徑
     process_audio_file(test_audio_file)
     print()
 

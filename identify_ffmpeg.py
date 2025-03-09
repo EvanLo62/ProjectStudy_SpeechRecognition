@@ -128,7 +128,7 @@ def extract_embedding(audio_path):
     #     exit
     
     # # 讀取 16kHz 音檔
-    # signal, fs = torchaudio.load(temp_16k_path)
+    # signal, fs = torchaudio.load(audio_path)
     
     # # 限制音訊檔案的最大長度（10 秒）
     # max_length = fs * 10  # 計算 10 秒對應的樣本數
@@ -138,9 +138,6 @@ def extract_embedding(audio_path):
     
     # # 使用 SpeechBrain 模型提取嵌入向量
     # embedding = model.encode_batch(signal).squeeze().numpy()
-    
-    # # # 清理暫存檔案
-    # os.remove(temp_16k_path)  # 刪除 16kHz 音訊檔案
     
     # return embedding  # 回傳提取的語音嵌入向量
 
@@ -324,10 +321,11 @@ def process_audio_directory(directory):
 
 
 if __name__ == "__main__":
-    # test_audio_file = "audiofile/2-0.wav"  # 新音檔路徑
-    # process_audio_file(test_audio_file)
-    # print()
-
-    test_directory = "test_audioFile/0009"  # 測試資料夾路徑
-    process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
+    test_audio_file = "test_audioFile/0363/363-1.wav"  # 新音檔路徑
+    # test_audio_file = "audioFile/test2.wav"  # 新音檔路徑
+    process_audio_file(test_audio_file)
     print()
+
+    # test_directory = "test_audioFile/0009"  # 測試資料夾路徑
+    # process_audio_directory(test_directory)  # 處理資料夾內的所有音檔
+    # print()
