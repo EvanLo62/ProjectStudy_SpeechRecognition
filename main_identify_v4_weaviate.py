@@ -308,7 +308,7 @@ def find_closest_speaker(client: Any, new_embedding: np.ndarray) -> Tuple[Option
         
         # 收集所有比對結果
         all_matches = []
-        for obj in results.objects:
+        for idx, obj in enumerate(results.objects):
             speaker_id = None
             # 嘗試獲取關聯的說話者
             if hasattr(obj, 'references') and obj.references.get('speaker'):
@@ -763,31 +763,137 @@ def main() -> None:
             
             # 處理命令列參數
             if len(sys.argv) > 1:
-                path = sys.argv[1]
-                if os.path.isfile(path):
-                    print("處理單一音檔模式")
-                    result = process_audio_file(client, path)
-                    if result:
-                        speaker_id, speaker_name, distance = result
-                        print(f"\n識別結果:")
-                        print(f"說話者: {speaker_name}")
-                        print(f"ID: {speaker_id}")
-                        print(f"相似度距離: {distance:.4f}")
-                elif os.path.isdir(path):
-                    print("處理資料夾模式")
-                    results = process_audio_directory(client, path)
-                    if results:
-                        print(f"\n識別結果摘要:")
-                        for file_path, speaker_id, speaker_name, distance in results:
-                            print(f"檔案: {os.path.basename(file_path)}, 說話者: {speaker_name}, 距離: {distance:.4f}")
+                # 處理 Windows 路徑，支援相對和絕對路徑
+                raw_path = sys.argv[1]
+                print(f"原始輸入路徑: {raw_path}")
+                
+                # 先列出檔案是否存在於測試資料夾
+                test_dir = "./testFiles/test_audioFile"
+                test_files_dir = os.path.normpath(os.path.join(os.getcwd(), test_dir))
+                print(f"掃描資料夾: {test_files_dir}")
+                
+                # 遞迴搜尋指定檔案名稱
+                found_files = []
+                filename_to_find = os.path.basename(raw_path.replace('\\', '/'))
+                
+                # 去除可能的引號
+                if filename_to_find.startswith('"') and filename_to_find.endswith('"'):
+                    filename_to_find = filename_to_find[1:-1]
+                
+                print(f"正在搜尋檔案: {filename_to_find}")
+                
+                for root, _, files in os.walk(test_files_dir):
+                    for file in files:
+                        if file == filename_to_find or (filename_to_find in file):
+                            found_path = os.path.join(root, file)
+                            found_files.append(found_path)
+                
+                # 如果找到檔案，直接使用第一個找到的檔案
+                if found_files:
+                    print(f"在測試資料夾中找到 {len(found_files)} 個匹配的檔案:")
+                    for idx, path in enumerate(found_files):
+                        print(f"  [{idx+1}] {path}")
+                    
+                    valid_path = found_files[0]
+                    print(f"使用第一個找到的檔案: {valid_path}")
+                    
+                    if os.path.isfile(valid_path):
+                        print("處理單一音檔模式")
+                        result = process_audio_file(client, valid_path)
+                        if result:
+                            speaker_id, speaker_name, distance = result
+                            print(f"\n識別結果:")
+                            print(f"說話者: {speaker_name}")
+                            print(f"ID: {speaker_id}")
+                            print(f"相似度距離: {distance:.4f}")
+                    elif os.path.isdir(valid_path):
+                        print("處理資料夾模式")
+                        results = process_audio_directory(client, valid_path)
+                        if results:
+                            print(f"\n識別結果摘要:")
+                            for file_path, speaker_id, speaker_name, distance in results:
+                                print(f"檔案: {os.path.basename(file_path)}, 說話者: {speaker_name}, 距離: {distance:.4f}")
                 else:
-                    print(f"無效的路徑: {path}")
-                    sys.exit(ExitCode.PARAMETER_ERROR)
+                    # 嘗試傳統路徑解析方法
+                    print("在測試資料夾中未找到匹配的檔案，嘗試直接解析路徑...")
+                    
+                    # 嘗試解析不同的路徑格式
+                    paths_to_try = [
+                        raw_path,                             # 原始輸入
+                        os.path.normpath(raw_path),           # 標準化路徑
+                        os.path.abspath(raw_path),            # 絕對路徑
+                        os.path.join(os.getcwd(), raw_path),  # 從當前目錄解析
+                        # 針對 Windows 的特殊處理
+                        raw_path.replace('\\', '/'),          # 替換反斜線為正斜線
+                        raw_path.strip('"'),                  # 移除可能的引號
+                        os.path.join(os.getcwd(), raw_path.replace('\\', '/')),  # 替換並加上當前目錄
+                        # 嘗試基於已知目錄結構的猜測路徑
+                        os.path.join(os.getcwd(), "testFiles", "test_audioFile", os.path.basename(raw_path.replace('\\', '/'))),
+                    ]
+                    
+                    # 移除重複路徑
+                    paths_to_try = list(dict.fromkeys(paths_to_try))
+                    
+                    valid_path = None
+                    for path in paths_to_try:
+                        print(f"嘗試路徑: {path}")
+                        if os.path.exists(path):
+                            valid_path = path
+                            print(f"  ✓ 路徑有效!")
+                            break
+                        else:
+                            print(f"  ✗ 路徑無效")
+                    
+                    if valid_path:
+                        print(f"\n使用有效路徑: {valid_path}")
+                        
+                        if os.path.isfile(valid_path):
+                            print("處理單一音檔模式")
+                            result = process_audio_file(client, valid_path)
+                            if result:
+                                speaker_id, speaker_name, distance = result
+                                print(f"\n識別結果:")
+                                print(f"說話者: {speaker_name}")
+                                print(f"ID: {speaker_id}")
+                                print(f"相似度距離: {distance:.4f}")
+                        elif os.path.isdir(valid_path):
+                            print("處理資料夾模式")
+                            results = process_audio_directory(client, valid_path)
+                            if results:
+                                print(f"\n識別結果摘要:")
+                                for file_path, speaker_id, speaker_name, distance in results:
+                                    print(f"檔案: {os.path.basename(file_path)}, 說話者: {speaker_name}, 距離: {distance:.4f}")
+                    else:
+                        print(f"\n無效的路徑: {raw_path}")
+                        print(f"已嘗試以下路徑:")
+                        for p in paths_to_try:
+                            print(f"  - {p}")
+                        
+                        # 提供建議
+                        print("\n建議:")
+                        print("1. 使用完整的絕對路徑")
+                        print("2. 將音檔檔名改為簡單格式 (例如: test.wav)")
+                        print("3. 確認檔案確實存在於您指定的位置")
+                        print("4. 嘗試使用以下語法:")
+                        print("   python main_identify_v4_weaviate.py \"./testFiles/test_audioFile/0009/9-5.wav\"")
+                        print("   或 (使用絕對路徑)")
+                        print(f"   python main_identify_v4_weaviate.py \"{os.path.join(os.getcwd(), 'testFiles', 'test_audioFile', '0009', '9-5.wav')}\"")
+                        
+                        # 列出測試資料夾中的內容，協助用戶找到正確的檔案
+                        print("\n測試資料夾中的可用目錄:")
+                        if os.path.exists(test_files_dir):
+                            for item in os.listdir(test_files_dir):
+                                item_path = os.path.join(test_files_dir, item)
+                                if os.path.isdir(item_path):
+                                    print(f"  - {item}/")
+                        
+                        sys.exit(ExitCode.PARAMETER_ERROR)
             else:
                 print("使用方式: python main_identify_v4_weaviate.py <音檔路徑或資料夾路徑>")
                 print("範例:")
-                print("  - 處理單一檔案: python main_identify_v4_weaviate.py testFiles/audioFile/1-0.wav")
-                print("  - 處理整個資料夾: python main_identify_v4_weaviate.py testFiles/audioFile")
+                print("  - 處理單一檔案: python main_identify_v4_weaviate.py \"./testFiles/test_audioFile/0009/9-5.wav\"")
+                print("  - 處理整個資料夾: python main_identify_v4_weaviate.py \"./testFiles/test_audioFile/0009\"")
+                print("提示: 在 Windows 命令提示字元中，建議使用引號來包含路徑，尤其是含有空格或特殊字元的路徑")
                 print("未提供參數，退出程式")
                 sys.exit(ExitCode.PARAMETER_ERROR)
         
@@ -798,10 +904,12 @@ def main() -> None:
     
     except Exception as e:
         print(f"執行過程中發生錯誤: {str(e)}")
+        import traceback
+        print(f"詳細錯誤追蹤: {traceback.format_exc()}")
         sys.exit(ExitCode.UNKNOWN_ERROR)
     
     print("======= 程式執行結束 =======")
     sys.exit(ExitCode.SUCCESS)
 
 if __name__ == "__main__":
-    main() 
+    main()

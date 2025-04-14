@@ -55,18 +55,58 @@ def resample_audio(signal, orig_sr, target_sr):
     """使用 scipy 進行高品質重新採樣"""
     return resample_poly(signal, target_sr, orig_sr)
 
-def extract_embedding(audio_path):
-    """提取音檔的嵌入向量，並處理降頻與升頻"""
-    signal, sr = sf.read(audio_path)
-    if signal.ndim > 1:
-        signal = signal.mean(axis=1)
-    signal_8k = resample_audio(signal, sr, 8000)
-    signal_16k = resample_audio(signal_8k, 8000, 16000)
-    signal_16k = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
-    max_length = 16000 * 10  # 限制10秒
-    signal_16k = signal_16k[:, :max_length] if signal_16k.shape[1] > max_length else signal_16k
-    embedding = model.encode_batch(signal_16k).squeeze().numpy()
-    return embedding
+def extract_embedding(audio_path: str) -> np.ndarray:
+    """
+    提取音檔的嵌入向量，根據音檔取樣率智能處理
+    
+    Args:
+        audio_path: 音檔路徑
+        
+    Returns:
+        np.ndarray: 音檔的嵌入向量
+        
+    處理流程:
+        1. 若音檔為 16kHz，則直接使用
+        2. 若音檔為 8kHz，則直接升頻到 16kHz
+        3. 若音檔取樣率高於 16kHz，則降頻到 16kHz
+        4. 其他取樣率，則重新採樣到 16kHz
+    """
+    try:
+        signal, sr = sf.read(audio_path)
+        
+        # 處理立體聲轉單聲道
+        if signal.ndim > 1:
+            signal = signal.mean(axis=1)
+            
+        # 根據取樣率處理
+        if sr == 16000:
+            # 已是 16kHz，直接使用
+            signal_16k = signal
+        elif sr == 8000:
+            # 若為 8kHz，直接升頻到 16kHz
+            signal_16k = resample_audio(signal, 8000, 16000)
+        elif sr > 16000:
+            # 若高於 16kHz，直接降頻到 16kHz
+            signal_16k = resample_audio(signal, sr, 16000)
+        else:
+            # 其他取樣率，重新採樣到 16kHz
+            signal_16k = resample_audio(signal, sr, 16000)
+        
+        # 轉換為 PyTorch 張量
+        signal_16k = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
+        
+        # 限制音檔長度（最多 10 秒）
+        max_length = 16000 * 10
+        if signal_16k.shape[1] > max_length:
+            signal_16k = signal_16k[:, :max_length]
+            
+        # 提取嵌入向量
+        embedding = model.encode_batch(signal_16k).squeeze().numpy()
+        return embedding
+        
+    except Exception as e:
+        print(f"提取嵌入向量時發生錯誤: {e}")
+        raise
 
 def list_all_embedding_files():
     """遍歷 EMBEDDING_DIR 下所有子資料夾，返回所有嵌入檔案資訊"""
@@ -204,6 +244,6 @@ def process_audio_directory(directory):
 if __name__ == "__main__":
     # 首次執行時先檢查更新 npy 檔用戶名
     sync_npy_username.sync_all_folders()
-    # 測試用：若要處理單一檔案或資料夾，可解除下列註解
-    # process_audio_file("path_to_audio.wav")
+    # 主程式執行: 若要處理單一檔案或資料夾，可解除下列註解
+    process_audio_file("path_to_audio.wav")
     # process_audio_directory("path_to_directory")

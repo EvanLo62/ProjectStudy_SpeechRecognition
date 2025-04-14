@@ -1,9 +1,9 @@
-import weaviate
+import weaviate # type: ignore
 import os
 import uuid
 import numpy as np
 from datetime import datetime
-import weaviate.classes.config as wc
+import weaviate.classes.config as wc # type: ignore
 
 def create_weaviate_collections() -> bool:
     """
