@@ -244,6 +244,7 @@ def process_audio_directory(directory):
 if __name__ == "__main__":
     # 首次執行時先檢查更新 npy 檔用戶名
     sync_npy_username.sync_all_folders()
+    
     # 主程式執行: 若要處理單一檔案或資料夾，可解除下列註解
     process_audio_file("path_to_audio.wav")
     # process_audio_directory("path_to_directory")

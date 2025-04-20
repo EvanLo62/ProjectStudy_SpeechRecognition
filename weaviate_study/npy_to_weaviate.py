@@ -12,10 +12,10 @@ import os
 import re
 import sys
 import uuid
-import weaviate
+import weaviate # type: ignore
 import numpy as np
 from datetime import datetime, timezone, timedelta
-import weaviate.classes.config as wc
+import weaviate.classes.config as wc # type: ignore
 from typing import Dict, List, Tuple, Optional, Any
 
 # 全域常數
