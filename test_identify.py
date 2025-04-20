@@ -1,3 +1,63 @@
+"""
+# 語者分離與識別系統 (Speech Separation and Speaker Identification System)
+
+## 安裝前置條件
+
+1. **Python 環境**：
+   - 需要 Python 3.9+ 環境
+   - Windows 建議使用虛擬環境 (venv)
+
+2. **安裝依賴套件**：
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. **Weaviate 資料庫設定**：
+   - 安裝並啟動 Weaviate 向量資料庫：
+     ```
+     docker-compose up -d
+     ```
+   - 執行 `create_collections.py` 建立必要的2個集合：
+     ```
+     python create_collections.py
+     ```
+   - 若要匯入現有語者嵌入向量，可執行：
+     ```
+     python weaviate_study/npy_to_weaviate.py
+     ```
+
+4. **模型下載**：
+   - 首次運行時會自動下載必要的 Speechbrain 預訓練模型
+   - 需要網際網路連接
+
+1. **啟動程式**：
+   ```
+   python test_identify.py
+   ```
+
+2. **操作流程**：
+   - 程式啟動後會開始錄音
+   - 按 `Ctrl+C` 停止錄音
+   - 程式會自動分離並識別說話者
+   - 最後顯示識別結果
+
+3. **輸出說明**：
+   - 原始混合音檔將保存在輸出目錄中
+   - 分離後的音檔保存在 `16K-model/Audios-16K-IDTF` 中
+   - 識別結果會顯示在終端機上，包含說話者ID和相似度
+
+## 注意事項
+
+1. 首次運行時會下載預訓練模型，需要網路連接
+2. 確保麥克風正常工作且已授權應用程式使用
+3. 靜音環境效果較佳，背景噪音可能影響分離和識別效果
+4. 使用 GPU 可大幅提升處理速度，但也可在 CPU 上運行
+
+
+更多詳細資訊請參考：https://github.com/LCY000/ProjectStudy_SpeechRecognition
+
+"""
+
 import os
 import numpy as np
 import torch
@@ -9,6 +69,8 @@ from concurrent.futures import ThreadPoolExecutor
 from speechbrain.inference import SepformerSeparation as separator
 from speechbrain.inference import SpeakerRecognition
 import noisereduce as nr
+# 導入 main_identify_v4_weaviate 模組
+import main_identify_v4_weaviate as speaker_id_v4
 
 # 基本錄音參數
 CHUNK = 1024
@@ -170,7 +232,7 @@ class AudioSeparator:
                     audio_data = np.concatenate(buffer[:window_frames])
                     audio_tensor = self.process_audio(audio_data)
                     
-                    if audio_tensor is not None:
+                    if (audio_tensor is not None):
                         logger.info(f"處理片段 {segment_index}")
                         future = self.executor.submit(
                             self.separate_and_save,
@@ -277,150 +339,62 @@ class AudioSeparator:
 # ================== 語者識別部分 ======================
 
 class SpeakerIdentifier:
-    def __init__(self):
-        self.model = SpeakerRecognition.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir="models/speechbrain_recognition"
-        )
-        logger.info("SpeakerIdentifier 初始化完成")
-        
-        # 確保嵌入目錄存在
-        if not os.path.exists(EMBEDDING_DIR):
-            os.makedirs(EMBEDDING_DIR)
-        
-        # 確保識別結果目錄存在
-        if not os.path.exists(IDENTIFIED_DIR):
-            os.makedirs(IDENTIFIED_DIR)
-
-    def extract_embedding(self, audio_path):
-        """提取音檔的嵌入向量"""
+    """說話者識別類，負責呼叫 v4 版本的語者識別功能"""
+    
+    def __init__(self) -> None:
+        """初始化說話者識別器，直接使用 v4 版本的 SpeakerIdentifier"""
         try:
-            signal, fs = torchaudio.load(audio_path)
-            
-            # 處理立體聲轉單聲道
-            if signal.size(0) > 1:
-                signal = torch.mean(signal, dim=0, keepdim=True)
-            
-            # 根據取樣率處理
-            if fs != 16000:
-                resampler = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)
-                signal = resampler(signal)
-            
-            # 限制音檔長度（最多 10 秒）
-            max_length = 16000 * 10
-            if signal.size(1) > max_length:
-                signal = signal[:, :max_length]
-                
-            # 提取嵌入向量
-            embedding = self.model.encode_batch(signal).cpu().numpy().squeeze()
-            return embedding
-            
+            # 直接使用 v4 版本的 SpeakerIdentifier
+            self.identifier = speaker_id_v4.SpeakerIdentifier()
+            logger.info("語者識別器初始化完成")
         except Exception as e:
-            logger.error(f"提取嵌入向量時發生錯誤: {e}")
+            logger.error(f"初始化語者識別器時發生錯誤：{e}")
             raise
-
-    def list_all_embedding_files(self):
-        """遍歷 EMBEDDING_DIR 下所有子資料夾，返回所有嵌入檔案資訊"""
-        embedding_files = []
-        for folder in os.listdir(EMBEDDING_DIR):
-            folder_path = os.path.join(EMBEDDING_DIR, folder)
-            if os.path.isdir(folder_path):
-                for file in os.listdir(folder_path):
-                    if file.endswith(".npy"):
-                        full_path = os.path.join(folder_path, file)
-                        embedding_files.append((folder, file, full_path))
-        return embedding_files
-
-    def compare_all_embeddings(self, new_embedding):
-        """計算新嵌入向量與所有現有嵌入的餘弦距離"""
-        from scipy.spatial.distance import cosine
+    
+    def process_audio_files(self, audio_files: list) -> dict:
+        """
+        處理多個音檔並進行說話者識別
         
-        embedding_files = self.list_all_embedding_files()
-        if not embedding_files:
-            logger.info("尚無任何已存的嵌入檔案。")
-            return None, float('inf'), []
+        Args:
+            audio_files: 音檔路徑列表
             
-        distances = []
-        for folder, file, full_path in embedding_files:
-            saved_embedding = np.load(full_path)
-            distance = cosine(new_embedding, saved_embedding)
-            distances.append((folder, file, distance))
-            
-        best_match = min(distances, key=lambda x: x[2])
-        return best_match, best_match[2], distances
-
-    def identify_speaker(self, audio_file):
-        """識別音檔對應的說話者"""
-        logger.info(f"識別音檔: {audio_file}")
-        
-        if not os.path.exists(audio_file):
-            logger.error(f"音檔 {audio_file} 不存在")
-            return None, float('inf')
-            
-        # 提取嵌入向量
-        new_embedding = self.extract_embedding(audio_file)
-        
-        # 比對最相似的說話者
-        best_match, best_distance, _ = self.compare_all_embeddings(new_embedding)
-        
-        if best_match is None:
-            logger.info("無法找到匹配的說話者，可能是首次使用系統")
-            return None, float('inf')
-            
-        # 顯示比對結果
-        speaker_folder = best_match[0]
-        logger.info(f"最相似的說話者: {speaker_folder}, 距離: {best_distance:.4f}")
-        
-        return speaker_folder, best_distance
-
-    def process_audio_files(self, audio_files):
-        """處理一批音檔進行識別"""
+        Returns:
+            dict: 音檔路徑 -> (說話者名稱, 相似度, 識別結果描述)
+        """
         results = {}
         
-        for audio_file in audio_files:
-            try:
-                speaker, distance = self.identify_speaker(audio_file)
-                
-                # 根據閾值決定是否確認為該說話者
-                if distance < THRESHOLD_NEW:
-                    result = f"{speaker} (距離: {distance:.4f})"
-                else:
-                    result = f"未知說話者 (距離: {distance:.4f})"
-                    
-                results[audio_file] = (speaker, distance, result)
-                logger.info(f"識別結果: {result}")
-                
-                # 將識別結果加入到檔名並複製到識別結果目錄
-                self.save_identified_audio(audio_file, speaker, distance)
-                
-            except Exception as e:
-                logger.error(f"處理 {audio_file} 時發生錯誤: {e}")
-                results[audio_file] = (None, None, f"處理錯誤: {str(e)}")
-                
-        return results
-        
-    def save_identified_audio(self, audio_file, speaker, distance):
-        """將識別後的音檔保存到專用目錄，並在檔名添加識別結果"""
         try:
-            filename = os.path.basename(audio_file)
-            basename, ext = os.path.splitext(filename)
-            
-            # 如果是未知說話者
-            if distance >= THRESHOLD_NEW:
-                new_filename = f"{basename}_unknown{ext}"
-            else:
-                new_filename = f"{basename}_{speaker}_{distance:.4f}{ext}"
+            for audio_file in audio_files:
+                if not os.path.exists(audio_file):
+                    logger.warning(f"音檔不存在: {audio_file}")
+                    results[audio_file] = (None, -1, "檔案不存在")
+                    continue
                 
-            new_path = os.path.join(IDENTIFIED_DIR, new_filename)
-            
-            # 讀取並保存音檔
-            audio, sr = torchaudio.load(audio_file)
-            torchaudio.save(new_path, audio, sr)
-            
-            logger.info(f"已保存識別後的音檔: {new_path}")
-            
+                logger.info(f"識別音檔: {audio_file}")
+                
+                # 呼叫 v4 版本的語者識別功能
+                result = self.identifier.process_audio_file(audio_file)
+                
+                if result:
+                    speaker_id, speaker_name, distance = result
+                    
+                    # 根據距離判斷識別結果
+                    if distance < speaker_id_v4.THRESHOLD_LOW:
+                        result_desc = f"已識別為說話者 {speaker_name} (非常相似)"
+                    elif distance < speaker_id_v4.THRESHOLD_UPDATE:
+                        result_desc = f"已識別為說話者 {speaker_name} (並已更新聲紋)"
+                    elif distance < speaker_id_v4.THRESHOLD_NEW:
+                        result_desc = f"已識別為說話者 {speaker_name} (相似但未更新)"
+                    else:
+                        result_desc = f"已識別為新說話者 {speaker_name}"
+                    
+                    results[audio_file] = (speaker_name, distance, result_desc)
+                else:
+                    results[audio_file] = (None, -1, "識別失敗")
         except Exception as e:
-            logger.error(f"保存識別後的音檔時發生錯誤: {e}")
+            logger.error(f"處理音檔時發生錯誤：{e}")
+        
+        return results
 
 
 # ================== 主流程 ======================

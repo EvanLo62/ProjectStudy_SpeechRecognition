@@ -146,22 +146,22 @@ class AudioProcessor:
                 signal = signal.mean(axis=1)
                 
             # 測試
-            signal_8k = self.resample_audio(signal, 16000, 8000)
-            signal_16k = self.resample_audio(signal_8k, 8000, 16000)
+            # signal_8k = self.resample_audio(signal, 16000, 8000)
+            # signal_16k = self.resample_audio(signal_8k, 8000, 16000)
 
-            # # 根據取樣率處理
-            # if sr == 16000:
-            #     # 已是 16kHz，直接使用
-            #     signal_16k = signal
-            # elif sr == 8000:
-            #     # 若為 8kHz，直接升頻到 16kHz
-            #     signal_16k = self.resample_audio(signal, 8000, 16000)
-            # elif sr > 16000:
-            #     # 若高於 16kHz，直接降頻到 16kHz
-            #     signal_16k = self.resample_audio(signal, sr, 16000)
-            # else:
-            #     # 其他取樣率，重新採樣到 16kHz
-            #     signal_16k = self.resample_audio(signal, sr, 16000)
+            # 根據取樣率處理
+            if sr == 16000:
+                # 已是 16kHz，直接使用
+                signal_16k = signal
+            elif sr == 8000:
+                # 若為 8kHz，直接升頻到 16kHz
+                signal_16k = self.resample_audio(signal, 8000, 16000)
+            elif sr > 16000:
+                # 若高於 16kHz，直接降頻到 16kHz
+                signal_16k = self.resample_audio(signal, sr, 16000)
+            else:
+                # 其他取樣率，重新採樣到 16kHz
+                signal_16k = self.resample_audio(signal, sr, 16000)
             
             # 轉換為 PyTorch 張量
             signal_16k = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
