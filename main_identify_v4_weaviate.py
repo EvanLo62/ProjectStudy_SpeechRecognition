@@ -691,9 +691,6 @@ class SpeakerIdentifier:
         except Exception as e:
             print(f"處理音檔時發生錯誤: {e}")
             return None
-        finally:
-            # 關閉 Weaviate 連接
-            self.database.close()
     
     def process_audio_directory(self, directory: str) -> Dict[str, Any]:
         """
@@ -824,8 +821,8 @@ if __name__ == "__main__":
     identifier = SpeakerIdentifier()
     
     # 主程式執行: 若要處理單一檔案或資料夾，可解除下列註解
-    identifier.process_audio_file("testFiles/test_audioFile/0770/770-2.wav")
-    # identifier.process_audio_directory("path_to_directory")
+    identifier.process_audio_file("16K-model/Audios-16K-IDTF/speaker1_20250426-22_45_53_1.wav")
+    # identifier.process_audio_directory("testFiles/test_audioFile/0770")
     
     # 如果需要將嵌入向量添加到現有說話者，可解除下列註解
     # identifier.add_embedding_to_existing_speaker("path_to_audio.wav", "speaker_uuid")

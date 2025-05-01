@@ -19,7 +19,7 @@ import weaviate.classes.config as wc # type: ignore
 from typing import Dict, List, Tuple, Optional, Any
 
 # 全域常數
-EMBEDDING_DIR = "../embeddingFiles"
+EMBEDDING_DIR = "C:/Users/ASUS/Desktop/Project/20241124_SpeechRecognition/ProjectStudy_SpeechRecognition/embeddingFiles"
 # 修正：將日期格式設定為台北時區（UTC+8）
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 DEFAULT_DATE = datetime(2025, 1, 1, 0, 0, 0, tzinfo=TAIPEI_TIMEZONE)

@@ -13,7 +13,7 @@
    ```
 
 3. **Weaviate 資料庫設定**：
-   - 安裝並啟動 Weaviate 向量資料庫：
+   - 安裝並啟動 Weaviate 向量資料庫，使用docker-compose.yml配置：
      ```
      docker-compose up -d
      ```
@@ -30,30 +30,13 @@
    - 首次運行時會自動下載必要的 Speechbrain 預訓練模型
    - 需要網際網路連接
 
-1. **啟動程式**：
+5. **啟動程式**：
    ```
    python test_identify.py
    ```
 
-2. **操作流程**：
-   - 程式啟動後會開始錄音
-   - 按 `Ctrl+C` 停止錄音
-   - 程式會自動分離並識別說話者
-   - 最後顯示識別結果
 
-3. **輸出說明**：
-   - 原始混合音檔將保存在輸出目錄中
-   - 分離後的音檔保存在 `16K-model/Audios-16K-IDTF` 中
-   - 識別結果會顯示在終端機上，包含說話者ID和相似度
-
-## 注意事項
-
-1. 首次運行時會下載預訓練模型，需要網路連接
-2. 確保麥克風正常工作且已授權應用程式使用
-3. 靜音環境效果較佳，背景噪音可能影響分離和識別效果
-4. 使用 GPU 可大幅提升處理速度，但也可在 CPU 上運行
-
-
+   
 更多詳細資訊請參考：https://github.com/LCY000/ProjectStudy_SpeechRecognition
 
 """
@@ -69,6 +52,8 @@ from concurrent.futures import ThreadPoolExecutor
 from speechbrain.inference import SepformerSeparation as separator
 from speechbrain.inference import SpeakerRecognition
 import noisereduce as nr
+# 導入 scipy.signal.resample_poly 進行重採樣
+from scipy.signal import resample_poly
 # 導入 main_identify_v4_weaviate 模組
 import main_identify_v4_weaviate as speaker_id_v4
 
@@ -88,9 +73,10 @@ NOISE_REDUCE_STRENGTH = 0.1
 
 # 全域參數設定
 EMBEDDING_DIR = "embeddingFiles"  # 所有說話者嵌入資料的根目錄
-THRESHOLD_LOW = 0.2     # 過於相似，不更新
-THRESHOLD_UPDATE = 0.34 # 更新嵌入向量
-THRESHOLD_NEW = 0.36    # 判定為新說話者
+THRESHOLD_LOW = speaker_id_v4.THRESHOLD_LOW     # 過於相似，不更新
+THRESHOLD_UPDATE = speaker_id_v4.THRESHOLD_UPDATE # 更新嵌入向量
+THRESHOLD_NEW = speaker_id_v4.THRESHOLD_NEW    # 判定為新說話者
+# 目前測試可能同一個人0.37以下都有可能，似乎因為分離效果很飄，很吃分離效果
 
 # 輸出目錄
 OUTPUT_DIR = "16K-model/Audios-16K-IDTF"
@@ -176,7 +162,7 @@ class AudioSeparator:
             if audio_tensor.shape[0] == 2:
                 audio_tensor = torch.mean(audio_tensor, dim=0, keepdim=True)
 
-            # 移至 GPU 並重新取樣至 8kHz
+            # 移至 GPU 並重新取樣
             audio_tensor = audio_tensor.to(self.device)
             resampled = self.resampler(audio_tensor)
             
