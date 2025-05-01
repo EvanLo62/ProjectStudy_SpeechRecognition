@@ -55,7 +55,7 @@ import noisereduce as nr
 # 導入 scipy.signal.resample_poly 進行重採樣
 from scipy.signal import resample_poly
 # 導入 main_identify_v4_weaviate 模組
-import main_identify_v4_weaviate as speaker_id_v4
+import main_identify_v4 as speaker_id_v4
 
 # 基本錄音參數
 CHUNK = 1024
