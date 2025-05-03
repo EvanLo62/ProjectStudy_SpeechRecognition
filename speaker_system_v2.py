@@ -3,9 +3,9 @@
 即時語者分離與識別系統 (Real-time Speech Separation and Speaker Identification System)
 ===============================================================================
 
-版本：v2.0.0
+版本：v2.1.0    (使用音訊流串接，並即時識別)
 作者：CYouuu, EvanLo62
-最後更新：2025-05-02
+最後更新：2025-05-04
 
 功能摘要：
 -----------
@@ -93,16 +93,14 @@ import sys
 import numpy as np
 import torch
 import torchaudio
-import pyaudio
+import pyaudio # type: ignore
 import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple, Any, Union
 from speechbrain.inference import SepformerSeparation as separator
 from speechbrain.inference import SpeakerRecognition
-import noisereduce as nr
-# 導入 scipy.signal.resample_poly 進行重採樣
-from scipy.signal import resample_poly
+import noisereduce as nr # type: ignore
 
 # 導入 main_identify_v5 模組
 import main_identify_v5 as speaker_id
@@ -221,7 +219,7 @@ def setup_logging(log_file: str = "system_output.log",
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(file_level)
     file_handler.setFormatter(logging.Formatter(
-        '[%(asctime)s] %(levellevel)s: %(message)s',
+        '[%(asctime)s] %(levelname)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     ))
     
@@ -259,7 +257,18 @@ class AudioSeparator:
         self.futures = []
         self.is_recording = False
         self.output_files = []  # 儲存分離後的音檔路徑
+        self.save_audio_files = True  # 設定: 是否將分離後的音訊儲存為wav檔案
         logger.info("AudioSeparator 初始化完成")
+        
+    def set_save_audio_files(self, save: bool) -> None:
+        """
+        設定是否儲存分離後的音訊檔案
+        
+        Args:
+            save: True 表示儲存音訊檔案，False 表示不儲存
+        """
+        self.save_audio_files = save
+        logger.info(f"音訊檔案儲存設定：{'已啟用' if save else '已停用'}")
 
     def spectral_gating(self, audio):
         """應用頻譜閘控降噪"""
@@ -484,7 +493,7 @@ class AudioSeparator:
 
     def separate_and_identify(self, audio_tensor: torch.Tensor, output_dir: str, segment_index: int) -> None:
         """
-        分離並儲存音訊，然後立即進行語音識別
+        分離音訊並直接進行語音識別，可選擇是否儲存音訊檔案
         
         Args:
             audio_tensor: 處理後的音訊張量
@@ -493,13 +502,14 @@ class AudioSeparator:
         """
         try:
             audio_files = []  # 儲存當前處理的音檔路徑
+            audio_streams = []  # 儲存音訊流資料供直接辨識
+            timestamp = datetime.now().strftime('%Y%m%d-%H_%M_%S')
             
             with torch.no_grad():
                 # 步驟1: 語者分離
                 separated = self.model.separate_batch(audio_tensor)
                 enhanced_separated = self.enhance_separation(separated)
                 
-                timestamp = datetime.now().strftime('%Y%m%d-%H_%M_%S')
                 for i in range(enhanced_separated.shape[2]):
                     speaker_audio = enhanced_separated[:, :, i].cpu()
                     
@@ -511,57 +521,66 @@ class AudioSeparator:
                     final_audio = speaker_audio[0].numpy()
                     final_tensor = torch.from_numpy(final_audio).unsqueeze(0)
                     
-                    # 建立輸出檔案路徑
-                    output_file = os.path.join(
-                        output_dir,
-                        f"speaker{i+1}_{timestamp}_{segment_index}.wav"
-                    )
+                    # 儲存音訊流資料供直接辨識
+                    audio_streams.append({
+                        'audio_data': final_audio,
+                        'sample_rate': TARGET_RATE,
+                        'name': f"speaker{i+1}_{timestamp}_{segment_index}"
+                    })
                     
-                    # 儲存音檔
-                    torchaudio.save(
-                        output_file,
-                        final_tensor,
-                        TARGET_RATE
-                    )
-                    
-                    # 記錄輸出檔案路徑
-                    audio_files.append(output_file)
-                    self.output_files.append(output_file)
+                    # 如果設定要儲存音訊檔案，則額外儲存分離檔案
+                    if self.save_audio_files:
+                        # 建立輸出檔案路徑
+                        output_file = os.path.join(
+                            output_dir,
+                            f"speaker{i+1}_{timestamp}_{segment_index}.wav"
+                        )
+                        
+                        # 儲存音檔
+                        torchaudio.save(
+                            output_file,
+                            final_tensor,
+                            TARGET_RATE
+                        )
+                        
+                        # 記錄輸出檔案路徑
+                        audio_files.append(output_file)
+                        self.output_files.append(output_file)
             
             # 步驟2: 即時進行語者識別
-            if audio_files:
-                # 使用簡單日誌方式輸出片段分離訊息
-                log_record = logging.LogRecord(
-                    "speaker_system", logging.INFO, "", 0, 
-                    f"片段 {segment_index} 分離完成，開始進行即時語者識別...", (), None
-                )
-                log_record.simple = True  # 使用簡單格式
-                logger.handle(log_record)
+            # 使用簡單日誌方式輸出片段分離訊息
+            logger.info(
+                f"片段 {segment_index} 分離完成，開始進行即時語者識別...",
+                extra={"simple": True}
+            )
+            
+            try:
+                # 初始化或獲取語者識別器實例 (單例模式)
+                identifier = SpeakerIdentifier()
                 
-                try:
-                    # 初始化或獲取語者識別器實例 (單例模式)
-                    identifier = SpeakerIdentifier()
-                    
-                    # 識別當前分離的音檔
+                results = {}
+                if audio_streams:
+                    # 直接使用音訊流進行識別 (預設一定為True)
+                    results = identifier.process_audio_streams(audio_streams)
+                elif audio_files:
+                    # 有儲存音訊檔案，使用檔案進行識別 (正常不會觸發)
                     results = identifier.process_audio_files(audio_files)
+                
+                # 使用簡化格式輸出識別結果
+                result_message = []
+                for audio_name, (speaker, distance, result) in results.items():
+                    # 使用簡單格式輸出識別結果
+                    result_message.append(f"【{audio_name} → {result}】")
+                
+                if result_message:
+                    message = f"片段 {segment_index} 識別結果:\n" + "\n".join(result_message)
+                    logger.info(
+                        message,
+                        extra={"simple": True}
+                    )
                     
-                    # 使用簡化格式輸出識別結果
-                    result_message = []
-                    for audio_file, (speaker, distance, result) in results.items():
-                        # 使用簡單格式輸出識別結果
-                        basename = os.path.basename(audio_file)
-                        result_message.append(f"【{basename} → {result}】")
-                    
-                    if result_message:
-                        log_record = logging.LogRecord(
-                            "speaker_system", logging.INFO, "", 0, 
-                            f"識別結果: {' '.join(result_message)}", (), None
-                        )
-                        log_record.simple = True
-                        logger.handle(log_record)
-                        
-                except Exception as e:
-                    logger.error(f"識別片段 {segment_index} 時發生錯誤：{e}")
+            except Exception as e:
+                logger.error(f"識別片段 {segment_index} 時發生錯誤：{e}")
             
             logger.info(f"片段 {segment_index} 處理完成")
             
@@ -639,14 +658,18 @@ class SpeakerIdentifier:
                     speaker_id_, speaker_name, distance = result
                     
                     # 根據距離判斷識別結果
-                    if distance < THRESHOLD_LOW:
-                        result_desc = f"說話者 {speaker_name} (非常相似)"
+                    if distance == -1:
+                        # 距離為 -1 表示新建立的說話者
+                        result_desc = f"新說話者 {speaker_name} \t(已建立新聲紋:{distance:.4f})"
+                    elif distance < THRESHOLD_LOW:
+                        result_desc = f"說話者 {speaker_name} \t(聲音非常相似:{distance:.4f})"
                     elif distance < THRESHOLD_UPDATE:
-                        result_desc = f"說話者 {speaker_name} (已更新聲紋)"
+                        result_desc = f"說話者 {speaker_name} \t(已更新聲紋:{distance:.4f})"
                     elif distance < THRESHOLD_NEW:
-                        result_desc = f"說話者 {speaker_name} (相似但未更新)"
+                        result_desc = f"說話者 {speaker_name} \t(相似但未更新:{distance:.4f})"
                     else:
-                        result_desc = f"新說話者 {speaker_name}"
+                        # 此處不應該執行到，因為距離大於 THRESHOLD_NEW 時應該創建新說話者
+                        result_desc = f"說話者 {speaker_name} \t(判斷不明確):{distance:.4f}"
                     
                     results[audio_file] = (speaker_name, distance, result_desc)
                     logger.info(f"結果: {result_desc}")
@@ -657,6 +680,92 @@ class SpeakerIdentifier:
             logger.error(f"處理音檔時發生錯誤：{e}")
         
         return results
+
+    def process_audio_streams(self, audio_streams: list) -> dict:
+        """
+        處理多個音訊流並進行說話者識別
+        
+        Args:
+            audio_streams: 音訊流資料列表，每個元素包含 'audio_data', 'sample_rate', 'name'
+            
+        Returns:
+            dict: 音訊流名稱 -> (說話者名稱, 相似度, 識別結果描述)
+        """
+        results = {}
+        
+        try:
+            for stream in audio_streams:
+                audio_data = stream['audio_data']
+                sample_rate = stream['sample_rate']
+                name = stream['name']
+                
+                logger.info(f"識別音訊流: {name}")
+                
+                # 呼叫 v5 版本的語者識別功能
+                result = self.identifier.process_audio_stream(audio_data, sample_rate, source_description=name)
+                
+                if result:
+                    speaker_id_, speaker_name, distance = result
+                    
+                    # 根據距離判斷識別結果
+                    if distance == -1:
+                        # 距離為 -1 表示新建立的說話者
+                        result_desc = f"新說話者 {speaker_name} \t(已建立新聲紋:{distance:.4f})"
+                    elif distance < THRESHOLD_LOW:
+                        result_desc = f"說話者 {speaker_name} \t(聲音非常相似:{distance:.4f})"
+                    elif distance < THRESHOLD_UPDATE:
+                        result_desc = f"說話者 {speaker_name} \t(已更新聲紋:{distance:.4f})"
+                    elif distance < THRESHOLD_NEW:
+                        result_desc = f"說話者 {speaker_name} \t(相似但未更新:{distance:.4f})"
+                    else:
+                        # 此處不應該執行到，因為距離大於 THRESHOLD_NEW 時應該創建新說話者
+                        result_desc = f"說話者 {speaker_name} \t(判斷不明確):{distance:.4f}"
+                    
+                    results[name] = (speaker_name, distance, result_desc)
+                    # logger.info(f"結果: {result_desc}")
+                else:
+                    results[name] = (None, -1, "識別失敗")
+                    logger.warning("識別失敗")
+        except Exception as e:
+            logger.error(f"處理音訊流時發生錯誤：{e}")
+        
+        return results
+
+
+def check_weaviate_connection() -> bool:
+    """
+    檢查 Weaviate 資料庫連線狀態
+    
+    Returns:
+        bool: 連線成功返回 True，失敗返回 False
+    """
+    try:
+        # 嘗試初始化 Weaviate Repository 以測試連線
+        repo = speaker_id.WeaviateRepository()
+        # 如果能夠成功創建實例並連線，則表明數據庫可用
+        logger.info("Weaviate 資料庫連線成功！")
+        return True
+    except Exception as e:
+        # 捕獲所有可能的例外情況
+        error_msg = str(e)
+        logger.error(f"Weaviate 資料庫連線失敗：{error_msg}")
+        
+        # 提供更詳細的錯誤信息和解決方案
+        print("\n" + "="*80)
+        print("錯誤：無法連線至 Weaviate 資料庫")
+        print("="*80)
+        print("可能的原因：")
+        print("1. Docker 服務未啟動")
+        print("2. Weaviate 容器未運行")
+        print("3. 連線埠被阻擋或被其他程式佔用")
+        print("\n解決方法：")
+        print("1. 確認 Docker Desktop 已啟動")
+        print("2. 執行以下命令啟動 Weaviate：")
+        print("   docker-compose -f weaviate_study/docker-compose.yml up -d")
+        print("3. 等待幾秒鐘，確保服務完全啟動")
+        print("4. 重新執行此程式")
+        print("="*80 + "\n")
+        return False
 
 
 # ================== 主流程 ======================
@@ -674,6 +783,11 @@ def main():
         # 步驟1: 設定 v5 的日誌輸出
         speaker_id.setup_logging(log_file="output_log.txt", mode="w")
         logger.info("語者分離與識別系統啟動 (即時識別模式)")
+        
+        # 在啟動時檢查 Weaviate 連線狀態
+        if not check_weaviate_connection():
+            logger.critical("由於無法連線至 Weaviate 資料庫，程式將終止執行。")
+            return  # 直接結束程式
         
         # 步驟2: 初始化語者分離器
         separator = AudioSeparator()

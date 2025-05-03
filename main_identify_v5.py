@@ -3,9 +3,9 @@
 語者識別引擎 (Speaker Identification Engine)
 ===============================================================================
 
-版本：v5.0.0
+版本：v5.1.0    (新增音訊流接口)
 作者：CYouuu
-最後更新：2025-05-02
+最後更新：2025-05-04
 
 功能摘要：
 -----------
@@ -27,25 +27,31 @@
 
 使用方式：
 -----------
- 1. 單檔案處理:
+ 1. 單檔案辨識:
     ```python
     identifier = SpeakerIdentifier()
     identifier.process_audio_file("path/to/audio.wav")
     ```
 
- 2. 整個目錄處理:
+ 2. 整個目錄檔案辨識:
     ```python
     identifier = SpeakerIdentifier()
     identifier.process_audio_directory("path/to/directory")
     ```
 
- 3. 添加音檔到指定說話者:
+ 3. 單個音訊流辨識:
+    ```python
+    identifier = SpeakerIdentifier()
+    identifier.process_audio_stream(stream)
+    ```
+
+ 4. 添加音檔到指定說話者:
     ```python
     identifier = SpeakerIdentifier()
     identifier.add_embedding_to_existing_speaker("path/to/audio.wav", "speaker_uuid")
     ```
 
- 4. 使用speaker_system_v2.py進行語者識別模組呼叫
+ 5. 使用speaker_system_v2.py進行語者識別模組呼叫
 
 前置需求：
 -----------
@@ -77,6 +83,42 @@ from typing import Tuple, List, Dict, Optional, Union, Any
 import weaviate  # type: ignore
 from weaviate.classes.query import MetadataQuery # type: ignore
 import sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
+
+# 控制輸出的全局變數
+_ENABLE_OUTPUT = False  # 預設為 False，即不輸出詳細訊息
+
+# 輸出控制函數
+def _print(*args, **kwargs) -> None:
+    """
+    受控輸出函數，只有當 _ENABLE_OUTPUT 為 True 時才會輸出
+    
+    Args:
+        *args: print 函數的位置參數
+        **kwargs: print 函數的關鍵字參數
+    """
+    if _ENABLE_OUTPUT:
+        print(*args, **kwargs)
+
+# 設置輸出開關的函數
+def set_output_enabled(enable: bool) -> None:
+    """
+    設置是否啟用模組的輸出
+    
+    Args:
+        enable: True 表示啟用輸出，False 表示禁用輸出
+    """
+    global _ENABLE_OUTPUT
+    old_value = _ENABLE_OUTPUT
+    _ENABLE_OUTPUT = enable
+    
+    if enable and not old_value:
+        print("已啟用 main_identify_v5 模組的輸出")
+    elif not enable and old_value:
+        print("已禁用 main_identify_v5 模組的輸出")
+
+# 替換原始 print 函數，以實現控制輸出
+original_print = print
+print = _print  # 替換全局 print 函數，使模組中的所有 print 調用都經過控制
 
 # 設定 httpx 的日誌層級為 WARNING 或更高，以關閉 INFO 層級的 HTTP 請求日誌
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -204,13 +246,13 @@ class AudioProcessor:
     def extract_embedding(self, audio_path: str) -> np.ndarray:
         """
         提取音檔的嵌入向量，根據音檔取樣率智能處理
-        
+
         Args:
             audio_path: 音檔路徑
-            
+
         Returns:
             np.ndarray: 音檔的嵌入向量
-            
+
         處理流程:
             1. 若音檔為 16kHz，則直接使用
             2. 若音檔為 8kHz，則直接升頻到 16kHz
@@ -219,43 +261,63 @@ class AudioProcessor:
         """
         try:
             signal, sr = sf.read(audio_path)
-            
+
             # 處理立體聲轉單聲道
             if signal.ndim > 1:
                 signal = signal.mean(axis=1)
-                
-            # 測試
-            # signal_8k = self.resample_audio(signal, 16000, 8000)
-            # signal_16k = self.resample_audio(signal_8k, 8000, 16000)
+
+            # 使用新的 stream 方法處理核心邏輯
+            return self.extract_embedding_from_stream(signal, sr)
+
+        except Exception as e:
+            print(f"從檔案提取嵌入向量時發生錯誤: {e}")
+            raise
+
+    def extract_embedding_from_stream(self, signal: np.ndarray, sr: int) -> np.ndarray:
+        """
+        從音訊流 (NumPy 陣列) 提取嵌入向量
+
+        Args:
+            signal: 音訊信號 (NumPy 陣列)
+            sr: 音訊信號的取樣率
+
+        Returns:
+            np.ndarray: 音檔的嵌入向量
+        """
+        try:
+            # 確保信號是 NumPy 陣列
+            if not isinstance(signal, np.ndarray):
+                signal = np.array(signal) # 嘗試轉換
+
+            # 處理立體聲轉單聲道 (如果需要)
+            if signal.ndim > 1:
+                signal = signal.mean(axis=1)
 
             # 根據取樣率處理
-            if sr == 16000:
-                # 已是 16kHz，直接使用
+            target_sr = 16000
+            if sr == target_sr:
                 signal_16k = signal
-            elif sr == 8000:
-                # 若為 8kHz，直接升頻到 16kHz
-                signal_16k = self.resample_audio(signal, 8000, 16000)
-            elif sr > 16000:
-                # 若高於 16kHz，直接降頻到 16kHz
-                signal_16k = self.resample_audio(signal, sr, 16000)
-            else:
-                # 其他取樣率，重新採樣到 16kHz
-                signal_16k = self.resample_audio(signal, sr, 16000)
-            
+            elif sr != target_sr:
+                # 重新採樣到 16kHz
+                signal_16k = self.resample_audio(signal, sr, target_sr)
+            # else: # 移除多餘的 else，因為 sr == target_sr 的情況已處理
+            #      # 已經是 16kHz
+            #      signal_16k = signal
+
             # 轉換為 PyTorch 張量
-            signal_16k = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
-            
+            signal_16k_tensor = torch.tensor(signal_16k, dtype=torch.float32).unsqueeze(0)
+
             # 限制音檔長度（最多 10 秒）
-            max_length = 16000 * 10
-            if signal_16k.shape[1] > max_length:
-                signal_16k = signal_16k[:, :max_length]
-                
+            max_length = target_sr * 10
+            if signal_16k_tensor.shape[1] > max_length:
+                signal_16k_tensor = signal_16k_tensor[:, :max_length]
+
             # 提取嵌入向量
-            embedding = self.model.encode_batch(signal_16k).squeeze().numpy()
+            embedding = self.model.encode_batch(signal_16k_tensor).squeeze().numpy()
             return embedding
-            
+
         except Exception as e:
-            print(f"提取嵌入向量時發生錯誤: {e}")
+            print(f"從音訊流提取嵌入向量時發生錯誤: {e}")
             raise
 
 
@@ -792,18 +854,43 @@ class SpeakerIdentifier:
             if not os.path.exists(audio_file):
                 self.simplified_print(f"音檔 {audio_file} 不存在，取消處理。", self.verbose)
                 return None
-            
+
+            # 讀取音檔獲取 signal 和 sr
+            signal, sr = sf.read(audio_file)
+
+            # 呼叫新的 stream 處理方法
+            return self.process_audio_stream(signal, sr, source_description=f"檔案: {os.path.basename(audio_file)}")
+
+        except Exception as e:
+            self.simplified_print(f"處理音檔 {audio_file} 時發生錯誤: {e}", self.verbose)
+            return None
+
+    def process_audio_stream(self, signal: np.ndarray, sr: int, source_description: str = "音訊流") -> Optional[Tuple[str, str, float]]:
+        """
+        處理音訊流 (NumPy 陣列) 並進行說話者識別
+
+        Args:
+            signal: 音訊信號 (NumPy 陣列)
+            sr: 音訊信號的取樣率
+            source_description: 描述音訊來源的字串 (用於日誌輸出)
+
+        Returns:
+            Optional[Tuple[str, str, float]]: (說話者ID, 說話者名稱, 相似度) 或 None 表示處理失敗
+        """
+        try:
+            self.simplified_print(f"\n處理來源: {source_description}", self.verbose)
+
             # 提取嵌入向量
-            new_embedding = self.audio_processor.extract_embedding(audio_file)
-            
+            new_embedding = self.audio_processor.extract_embedding_from_stream(signal, sr)
+
             # 與 Weaviate 中的嵌入向量比對
             best_id, best_name, best_distance, all_distances = self.database.compare_embedding(new_embedding)
-            
+
             # 輸出比對結果
             if self.verbose and all_distances:
                 for obj_id, name, distance, update_count in all_distances[:3]:  # 只顯示前3個結果
                     self.format_comparison_result(name, update_count, distance, self.verbose)
-            
+
             # 根據距離進行判斷，使用輔助函數處理不同情況
             if best_id is None:
                 # 資料庫為空，直接創建新說話者
@@ -821,13 +908,13 @@ class SpeakerIdentifier:
             else:
                 # 判定為新說話者
                 result = self._handle_new_speaker(new_embedding)
-                
+
             return result
-                
+
         except Exception as e:
-            self.simplified_print(f"處理音檔時發生錯誤: {e}", self.verbose)
+            self.simplified_print(f"處理音訊流 '{source_description}' 時發生錯誤: {e}", self.verbose)
             return None
-    
+
     def process_audio_directory(self, directory: str) -> Dict[str, Any]:
         """
         處理指定資料夾內所有 .wav 檔案
@@ -953,12 +1040,27 @@ class SpeakerIdentifier:
 
 
 if __name__ == "__main__":
+    set_output_enabled(True)  # 啟用輸出
+
     # 創建說話者識別器
     identifier = SpeakerIdentifier()
     
     # 主程式執行: 若要處理單一檔案或資料夾，可解除下列註解
     setup_logging()
-    identifier.process_audio_file("16K-model/Audios-16K-IDTF/speaker1_20250426-22_45_53_1.wav")
+
+    # 範例：處理單一檔案 (現在會透過 process_audio_stream)
+    identifier.process_audio_file("16K-model/Audios-16K-IDTF/speaker1_20250501-22_49_13_1.wav")
+
+    # 範例：直接處理音訊流 (假設你有 NumPy 陣列 signal 和取樣率 sr)
+    # try:
+    #     # 假設這是從某個來源得到的音訊數據和取樣率
+    #     # 例如：從麥克風、網路流等
+    #     sample_signal, sample_sr = sf.read("16K-model/Audios-16K-IDTF/speaker2_20250501-22_49_13_1.wav") # 僅為範例，實際應來自流
+    #     identifier.process_audio_stream(sample_signal, sample_sr, source_description="範例音訊流")
+    # except Exception as e:
+    #     print(f"處理範例音訊流時出錯: {e}")
+
+
     # identifier.process_audio_directory("testFiles/test_audioFile/0770")
     restore_stdout()
     
