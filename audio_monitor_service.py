@@ -23,7 +23,7 @@ import os
 from typing import Optional, Union
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from main_identify_v3 import process_audio_file
+from archive.deprecated.main_identify_v3 import process_audio_file
 
 def wait_for_file_complete(file_path: str, wait_time: float = 0.1, retries: int = 5) -> bool:
     """
