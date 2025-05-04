@@ -82,10 +82,12 @@ from datetime import datetime, timezone
 from typing import Tuple, List, Dict, Optional, Union, Any
 import weaviate  # type: ignore
 from weaviate.classes.query import MetadataQuery # type: ignore
-import sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
 
 # 控制輸出的全局變數
 _ENABLE_OUTPUT = False  # 預設為 False，即不輸出詳細訊息
+
+# 保存原始 print 函數的引用
+original_print = print
 
 # 輸出控制函數
 def _print(*args, **kwargs) -> None:
@@ -97,7 +99,7 @@ def _print(*args, **kwargs) -> None:
         **kwargs: print 函數的關鍵字參數
     """
     if _ENABLE_OUTPUT:
-        print(*args, **kwargs)
+        original_print(*args, **kwargs)
 
 # 設置輸出開關的函數
 def set_output_enabled(enable: bool) -> None:
@@ -112,12 +114,11 @@ def set_output_enabled(enable: bool) -> None:
     _ENABLE_OUTPUT = enable
     
     if enable and not old_value:
-        print("已啟用 main_identify_v5 模組的輸出")
+        original_print("已啟用 main_identify_v5 模組的輸出")
     elif not enable and old_value:
-        print("已禁用 main_identify_v5 模組的輸出")
+        original_print("已禁用 main_identify_v5 模組的輸出")
 
 # 替換原始 print 函數，以實現控制輸出
-original_print = print
 print = _print  # 替換全局 print 函數，使模組中的所有 print 調用都經過控制
 
 # 設定 httpx 的日誌層級為 WARNING 或更高，以關閉 INFO 層級的 HTTP 請求日誌
@@ -201,8 +202,8 @@ from speechbrain.inference import SpeakerRecognition
 
 # 全域參數設定
 THRESHOLD_LOW = 0.27     # 過於相似，不更新
-THRESHOLD_UPDATE = 0.34 # 更新嵌入向量
-THRESHOLD_NEW = 0.36    # 判定為新說話者
+THRESHOLD_UPDATE = 0.35  # 更新嵌入向量
+THRESHOLD_NEW = 0.385    # 判定為新說話者
 DEFAULT_SPEAKER_NAME = "未命名說話者"  # 預設的說話者名稱
 
 # Weaviate 連接參數（如果需要可以修改）
