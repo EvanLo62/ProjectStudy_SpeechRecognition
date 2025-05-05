@@ -69,9 +69,9 @@ Weaviate 資料庫設定：
 
 系統參數：
 -----------
- - THRESHOLD_LOW = 0.27: 過於相似，不更新向量
+ - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
  - THRESHOLD_UPDATE = 0.34: 相似度足夠，更新向量
- - THRESHOLD_NEW = 0.36: 超過此值視為新語者
+ - THRESHOLD_NEW = 0.39: 超過此值視為新語者
  - WINDOW_SIZE = 6: 處理窗口大小（秒）
  - OVERLAP = 0.5: 窗口重疊率
 
@@ -219,7 +219,7 @@ def setup_logging(log_file: str = "system_output.log",
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(file_level)
     file_handler.setFormatter(logging.Formatter(
-        '[%(asctime)s] %(levelname)s: %(message)s',
+        '[%(asctime)s] %(levellevel)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     ))
     
@@ -503,7 +503,10 @@ class AudioSeparator:
         try:
             audio_files = []  # 儲存當前處理的音檔路徑
             audio_streams = []  # 儲存音訊流資料供直接辨識
-            timestamp = datetime.now().strftime('%Y%m%d-%H_%M_%S')
+            
+            # 只呼叫一次 datetime.now()，提高效能並確保時間一致性
+            timestamp_obj = datetime.now()
+            timestamp = timestamp_obj.strftime('%Y%m%d-%H_%M_%S')
             
             with torch.no_grad():
                 # 步驟1: 語者分離
@@ -560,11 +563,8 @@ class AudioSeparator:
                 
                 results = {}
                 if audio_streams:
-                    # 直接使用音訊流進行識別 (預設一定為True)
-                    results = identifier.process_audio_streams(audio_streams)
-                elif audio_files:
-                    # 有儲存音訊檔案，使用檔案進行識別 (正常不會觸發)
-                    results = identifier.process_audio_files(audio_files)
+                    # 直接使用音訊流進行識別，同時傳遞時間戳記物件
+                    results = identifier.process_audio_streams(audio_streams, timestamp_obj)
                 
                 # 使用簡化格式輸出識別結果
                 result_message = []
@@ -630,63 +630,13 @@ class SpeakerIdentifier:
             logger.error(f"初始化語者識別器時發生錯誤：{e}")
             raise
     
-    def process_audio_files(self, audio_files: list) -> dict:
-        """
-        處理多個音檔並進行說話者識別
-        
-        Args:
-            audio_files: 音檔路徑列表
-            
-        Returns:
-            dict: 音檔路徑 -> (說話者名稱, 相似度, 識別結果描述)
-        """
-        results = {}
-        
-        try:
-            for audio_file in audio_files:
-                if not os.path.exists(audio_file):
-                    logger.warning(f"音檔不存在: {audio_file}")
-                    results[audio_file] = (None, -1, "檔案不存在")
-                    continue
-                
-                logger.info(f"識別音檔: {os.path.basename(audio_file)}")
-                
-                # 呼叫 v5 版本的語者識別功能
-                result = self.identifier.process_audio_file(audio_file)
-                
-                if result:
-                    speaker_id_, speaker_name, distance = result
-                    
-                    # 根據距離判斷識別結果
-                    if distance == -1:
-                        # 距離為 -1 表示新建立的說話者
-                        result_desc = f"新說話者 {speaker_name} \t(已建立新聲紋:{distance:.4f})"
-                    elif distance < THRESHOLD_LOW:
-                        result_desc = f"說話者 {speaker_name} \t(聲音非常相似:{distance:.4f})"
-                    elif distance < THRESHOLD_UPDATE:
-                        result_desc = f"說話者 {speaker_name} \t(已更新聲紋:{distance:.4f})"
-                    elif distance < THRESHOLD_NEW:
-                        result_desc = f"說話者 {speaker_name} \t(相似但未更新:{distance:.4f})"
-                    else:
-                        # 此處不應該執行到，因為距離大於 THRESHOLD_NEW 時應該創建新說話者
-                        result_desc = f"說話者 {speaker_name} \t(判斷不明確):{distance:.4f}"
-                    
-                    results[audio_file] = (speaker_name, distance, result_desc)
-                    logger.info(f"結果: {result_desc}")
-                else:
-                    results[audio_file] = (None, -1, "識別失敗")
-                    logger.warning("識別失敗")
-        except Exception as e:
-            logger.error(f"處理音檔時發生錯誤：{e}")
-        
-        return results
-
-    def process_audio_streams(self, audio_streams: list) -> dict:
+    def process_audio_streams(self, audio_streams: list, timestamp: datetime) -> dict:
         """
         處理多個音訊流並進行說話者識別
         
         Args:
             audio_streams: 音訊流資料列表，每個元素包含 'audio_data', 'sample_rate', 'name'
+            timestamp: 音訊流的時間戳記物件
             
         Returns:
             dict: 音訊流名稱 -> (說話者名稱, 相似度, 識別結果描述)
@@ -701,8 +651,13 @@ class SpeakerIdentifier:
                 
                 logger.info(f"識別音訊流: {name}")
                 
-                # 呼叫 v5 版本的語者識別功能
-                result = self.identifier.process_audio_stream(audio_data, sample_rate, source_description=name)
+                # 呼叫 v5 版本的語者識別功能，傳入時間戳記
+                result = self.identifier.process_audio_stream(
+                    audio_data, 
+                    sample_rate, 
+                    audio_source=name,
+                    timestamp=timestamp
+                )
                 
                 if result:
                     speaker_id_, speaker_name, distance = result
@@ -793,7 +748,7 @@ def main():
         separator = AudioSeparator()
         
         # 步驟3: 錄音並進行語者分離 (分離的同時進行識別)
-        # 注意：識別功能已整合到 separate_and_save 方法中
+        # 注意：識別功能已整合到 separate_and_identify 方法中
         logger.info("開始錄音並執行即時分離與識別...")
         mixed_audio_file = separator.record_and_process(OUTPUT_DIR)
         

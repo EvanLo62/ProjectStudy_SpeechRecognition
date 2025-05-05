@@ -60,6 +60,13 @@
  - Weaviate 向量資料庫 (需通過 Docker 啟動)
  - NumPy, PyTorch, SoundFile 等相關處理套件
 
+ 系統參數：
+-----------
+ - _ENABLE_OUTPUT = False: 控制模組是否輸出訊息 (預設False不輸出)
+ - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
+ - THRESHOLD_UPDATE = 0.34: 相似度足夠，更新向量
+ - THRESHOLD_NEW = 0.39: 超過此值視為新語者
+
 詳細資訊：
 -----------
 請參考專案文件: https://github.com/LCY000/ProjectStudy_SpeechRecognition
@@ -201,9 +208,9 @@ def restore_stdout() -> None:
 from speechbrain.inference import SpeakerRecognition
 
 # 全域參數設定
-THRESHOLD_LOW = 0.27     # 過於相似，不更新
-THRESHOLD_UPDATE = 0.35  # 更新嵌入向量
-THRESHOLD_NEW = 0.385    # 判定為新說話者
+THRESHOLD_LOW = 0.26     # 過於相似，不更新
+THRESHOLD_UPDATE = 0.34  # 更新嵌入向量
+THRESHOLD_NEW = 0.39    # 判定為新說話者
 DEFAULT_SPEAKER_NAME = "未命名說話者"  # 預設的說話者名稱
 
 # Weaviate 連接參數（如果需要可以修改）
@@ -558,12 +565,15 @@ class WeaviateRepository:
             print(f"創建新說話者時發生錯誤: {e}")
             raise
     
-    def handle_new_speaker(self, new_embedding: np.ndarray) -> Tuple[str, str, str]:
+    def handle_new_speaker(self, new_embedding: np.ndarray, audio_source: str = "", create_time: Optional[datetime] = None, updated_time: Optional[datetime] = None) -> Tuple[str, str, str]:
         """
         處理全新的說話者：創建新說話者和嵌入向量
         
         Args:
             new_embedding: 新的嵌入向量
+            audio_source: 音訊來源名稱，例如檔案名稱或識別碼
+            create_time: 自訂創建時間，如果為 None 則使用當前時間
+            updated_time: 自訂更新時間，如果為 None 則使用當前時間
             
         Returns:
             tuple: (說話者ID, 聲紋向量ID, 說話者名稱)
@@ -588,13 +598,18 @@ class WeaviateRepository:
             voice_print_collection = self.client.collections.get("VoicePrint")
             voice_print_id = str(uuid.uuid4())
             
+            # 格式化時間或使用當前時間
+            create_time_str = format_rfc3339(create_time) if create_time else format_rfc3339()
+            updated_time_str = format_rfc3339(updated_time) if updated_time else format_rfc3339()
+            
             # 創建聲紋向量
             voice_print_collection.data.insert(
                 properties={
-                    "create_time": format_rfc3339(),
-                    "updated_time": format_rfc3339(),
+                    "create_time": create_time_str,
+                    "updated_time": updated_time_str,
                     "update_count": 1,
-                    "speaker_name": speaker_name
+                    "speaker_name": speaker_name,
+                    "audio_source": audio_source
                 },
                 uuid=voice_print_id,
                 vector=new_embedding.tolist(),
@@ -608,7 +623,7 @@ class WeaviateRepository:
                 uuid=speaker_id,
                 properties={
                     "voiceprint_ids": [voice_print_id],
-                    "last_active_time": format_rfc3339()
+                    "last_active_time": updated_time_str
                 }
             )
             
@@ -799,17 +814,19 @@ class SpeakerIdentifier:
         self.database.match_speaker(best_id, best_name, best_distance)
         return best_id, best_name, best_distance
     
-    def _handle_new_speaker(self, new_embedding: np.ndarray) -> Tuple[str, str, float]:
+    def _handle_new_speaker(self, new_embedding: np.ndarray, audio_source: str = "", timestamp: Optional[datetime] = None) -> Tuple[str, str, float]:
         """
         處理新說話者的情況：創建新說話者
         
         Args:
             new_embedding: 新的嵌入向量
+            audio_source: 音訊來源描述
+            timestamp: 音訊的時間戳記，用於設定聲紋的創建時間和更新時間
             
         Returns:
             Tuple[str, str, float]: (說話者ID, 說話者名稱, 相似度)
         """
-        speaker_id, voice_print_id, speaker_name = self.database.handle_new_speaker(new_embedding)
+        speaker_id, voice_print_id, speaker_name = self.database.handle_new_speaker(new_embedding, audio_source, timestamp, timestamp)
         return speaker_id, speaker_name, -1  # -1 表示全新的說話者
     
     # 簡化輸出的控制函數
@@ -860,26 +877,27 @@ class SpeakerIdentifier:
             signal, sr = sf.read(audio_file)
 
             # 呼叫新的 stream 處理方法
-            return self.process_audio_stream(signal, sr, source_description=f"檔案: {os.path.basename(audio_file)}")
+            return self.process_audio_stream(signal, sr, audio_source=f"檔案: {os.path.basename(audio_file)}")
 
         except Exception as e:
             self.simplified_print(f"處理音檔 {audio_file} 時發生錯誤: {e}", self.verbose)
             return None
 
-    def process_audio_stream(self, signal: np.ndarray, sr: int, source_description: str = "音訊流") -> Optional[Tuple[str, str, float]]:
+    def process_audio_stream(self, signal: np.ndarray, sr: int, audio_source: str = "無", timestamp: Optional[datetime] = None) -> Optional[Tuple[str, str, float]]:
         """
         處理音訊流 (NumPy 陣列) 並進行說話者識別
 
         Args:
             signal: 音訊信號 (NumPy 陣列)
             sr: 音訊信號的取樣率
-            source_description: 描述音訊來源的字串 (用於日誌輸出)
+            audio_source: 音訊來源的名稱 (用於未來回朔音檔)
+            timestamp: 音訊的時間戳記，用於設定聲紋的創建時間和更新時間
 
         Returns:
             Optional[Tuple[str, str, float]]: (說話者ID, 說話者名稱, 相似度) 或 None 表示處理失敗
         """
         try:
-            self.simplified_print(f"\n處理來源: {source_description}", self.verbose)
+            self.simplified_print(f"\n處理來源: {audio_source}", self.verbose)
 
             # 提取嵌入向量
             new_embedding = self.audio_processor.extract_embedding_from_stream(signal, sr)
@@ -896,24 +914,24 @@ class SpeakerIdentifier:
             if best_id is None:
                 # 資料庫為空，直接創建新說話者
                 self.simplified_print("資料庫為空，創建新說話者", self.verbose)
-                result = self._handle_new_speaker(new_embedding)
+                # 傳遞音訊來源名稱和時間戳記
+                return self._handle_new_speaker(new_embedding, audio_source, timestamp)
             elif best_distance < self.threshold_low:
                 # 過於相似，不更新
-                result = self._handle_very_similar(best_id, best_name, best_distance)
+                return self._handle_very_similar(best_id, best_name, best_distance)
             elif best_distance < self.threshold_update:
                 # 距離在允許的範圍內，更新嵌入向量
-                result = self._handle_update_embedding(best_id, best_name, best_distance, new_embedding)
+                return self._handle_update_embedding(best_id, best_name, best_distance, new_embedding)
             elif best_distance < self.threshold_new:
                 # 距離在匹配範圍內，但不更新
-                result = self._handle_match_only(best_id, best_name, best_distance)
+                return self._handle_match_only(best_id, best_name, best_distance)
             else:
                 # 判定為新說話者
-                result = self._handle_new_speaker(new_embedding)
-
-            return result
+                # 傳遞音訊來源名稱和時間戳記
+                return self._handle_new_speaker(new_embedding, audio_source, timestamp)
 
         except Exception as e:
-            self.simplified_print(f"處理音訊流 '{source_description}' 時發生錯誤: {e}", self.verbose)
+            self.simplified_print(f"處理音訊流 '{audio_source}' 時發生錯誤: {e}", self.verbose)
             return None
 
     def process_audio_directory(self, directory: str) -> Dict[str, Any]:

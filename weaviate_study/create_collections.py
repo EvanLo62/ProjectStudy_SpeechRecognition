@@ -50,8 +50,8 @@ def create_weaviate_collections() -> bool:
                 wc.Property(name="create_time", data_type=wc.DataType.DATE),
                 wc.Property(name="updated_time", data_type=wc.DataType.DATE),
                 wc.Property(name="update_count", data_type=wc.DataType.INT),
-                # 加入直接存儲基本使用者資訊的欄位，減少跨集合查詢的需求
                 wc.Property(name="speaker_name", data_type=wc.DataType.TEXT),
+                wc.Property(name="audio_source", data_type=wc.DataType.TEXT),
             ],
             references=[
                 wc.ReferenceProperty(
