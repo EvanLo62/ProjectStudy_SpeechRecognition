@@ -3,9 +3,9 @@
 即時語者分離與識別系統 (Real-time Speech Separation and Speaker Identification System)
 ===============================================================================
 
-版本：v2.1.0    (使用音訊流串接，並即時識別)
+版本：v2.1.5    (新增語者管理功能)
 作者：CYouuu, EvanLo62
-最後更新：2025-05-04
+最後更新：2025-05-06
 
 功能摘要：
 -----------
@@ -16,7 +16,13 @@
  2. 語者分離：能夠將多位語者的混合語音分離成獨立的音檔
  3. 即時識別：分離後立即進行語者識別，顯示實時識別結果
  4. 聲紋更新：自動更新語者聲紋向量，提高識別準確率
- 5. 單例模式：避免模型和資料庫重複初始化，提高效能
+ 5. 說話者管理：獨立模組化的語者與聲紋管理功能
+ 
+系統模組架構：
+-----------
+ - speaker_system_v2.py：主系統，負責語者分離與識別
+ - main_identify_v5.py：語者識別引擎，負責聲紋比對
+ - speaker_manager.py：語者與聲紋管理模組
 
 技術架構：
 -----------
@@ -104,6 +110,9 @@ import noisereduce as nr # type: ignore
 
 # 導入 main_identify_v5 模組
 import main_identify_v5 as speaker_id
+
+# 導入語者管理模組
+import speaker_manager
 
 # 基本錄音參數
 CHUNK = 1024
@@ -219,7 +228,7 @@ def setup_logging(log_file: str = "system_output.log",
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(file_level)
     file_handler.setFormatter(logging.Formatter(
-        '[%(asctime)s] %(levellevel)s: %(message)s',
+        '[%(asctime)s] %(levelname)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     ))
     
@@ -671,7 +680,7 @@ class SpeakerIdentifier:
                     elif distance < THRESHOLD_UPDATE:
                         result_desc = f"說話者 {speaker_name} \t(已更新聲紋:{distance:.4f})"
                     elif distance < THRESHOLD_NEW:
-                        result_desc = f"說話者 {speaker_name} \t(相似但未更新:{distance:.4f})"
+                        result_desc = f"說話者 {speaker_name} \t(新增新的聲紋:{distance:.4f})"
                     else:
                         # 此處不應該執行到，因為距離大於 THRESHOLD_NEW 時應該創建新說話者
                         result_desc = f"說話者 {speaker_name} \t(判斷不明確):{distance:.4f}"
@@ -686,45 +695,30 @@ class SpeakerIdentifier:
         
         return results
 
-
 def check_weaviate_connection() -> bool:
     """
-    檢查 Weaviate 資料庫連線狀態
-    
+    檢查 Weaviate 資料庫連線狀態。
+
     Returns:
-        bool: 連線成功返回 True，失敗返回 False
+        bool: 若連線成功回傳 True，否則回傳 False。
     """
     try:
-        # 嘗試初始化 Weaviate Repository 以測試連線
-        repo = speaker_id.WeaviateRepository()
-        # 如果能夠成功創建實例並連線，則表明數據庫可用
-        logger.info("Weaviate 資料庫連線成功！")
+        import weaviate  # type: ignore
+        client = weaviate.connect_to_local()
+        # 檢查是否能存取必要集合
+        if not client.is_live():
+            logger.error("Weaviate 服務未啟動或無法存取。")
+            return False
+        if not (client.collections.exists("Speaker") and client.collections.exists("VoicePrint")):
+            logger.error("Weaviate 缺少必要集合 (Speaker 或 VoicePrint)。請先執行 create_collections.py。")
+            return False
         return True
     except Exception as e:
-        # 捕獲所有可能的例外情況
-        error_msg = str(e)
-        logger.error(f"Weaviate 資料庫連線失敗：{error_msg}")
-        
-        # 提供更詳細的錯誤信息和解決方案
-        print("\n" + "="*80)
-        print("錯誤：無法連線至 Weaviate 資料庫")
-        print("="*80)
-        print("可能的原因：")
-        print("1. Docker 服務未啟動")
-        print("2. Weaviate 容器未運行")
-        print("3. 連線埠被阻擋或被其他程式佔用")
-        print("\n解決方法：")
-        print("1. 確認 Docker Desktop 已啟動")
-        print("2. 執行以下命令啟動 Weaviate：")
-        print("   docker-compose -f weaviate_study/docker-compose.yml up -d")
-        print("3. 等待幾秒鐘，確保服務完全啟動")
-        print("4. 重新執行此程式")
-        print("="*80 + "\n")
+        logger.error(f"Weaviate 連線失敗：{e}")
         return False
 
 
-# ================== 主流程 ======================
-
+# 在main函數中添加選項以啟動說話者管理系統
 def main():
     """
     先分離再識別的主流程 - 即時版本
@@ -735,34 +729,58 @@ def main():
     3. 可以實時顯示識別結果
     """
     try:
-        # 步驟1: 設定 v5 的日誌輸出
-        speaker_id.setup_logging(log_file="output_log.txt", mode="w")
-        logger.info("語者分離與識別系統啟動 (即時識別模式)")
+        # 顯示主選單
+        print("\n" + "="*60)
+        print("語者分離與識別系統".center(56))
+        print("="*60)
+        print("1. 啟動即時語者分離與識別")
+        print("2. 管理說話者和聲紋")
+        print("0. 退出")
+        print("-"*60)
+        choice = input("請選擇操作 (0-2): ").strip()
         
-        # 在啟動時檢查 Weaviate 連線狀態
-        if not check_weaviate_connection():
-            logger.critical("由於無法連線至 Weaviate 資料庫，程式將終止執行。")
-            return  # 直接結束程式
+        if choice == "0":
+            print("程式結束")
+            return
         
-        # 步驟2: 初始化語者分離器
-        separator = AudioSeparator()
+        elif choice == "1":
+            # 原有的即時識別功能
+            # 步驟1: 設定 v5 的日誌輸出
+            speaker_id.setup_logging(log_file="output_log.txt", mode="w")
+            logger.info("語者分離與識別系統啟動 (即時識別模式)")
+            
+            # 在啟動時檢查 Weaviate 連線狀態
+            if not check_weaviate_connection():
+                logger.critical("由於無法連線至 Weaviate 資料庫，程式將終止執行。")
+                return  # 直接結束程式
+            
+            # 步驟2: 初始化語者分離器
+            separator = AudioSeparator()
+            
+            # 步驟3: 錄音並進行語者分離 (分離的同時進行識別)
+            # 注意：識別功能已整合到 separate_and_identify 方法中
+            logger.info("開始錄音並執行即時分離與識別...")
+            mixed_audio_file = separator.record_and_process(OUTPUT_DIR)
+            
+            # 步驟4: 錄音結束後的摘要
+            separated_files = separator.get_output_files()
+            logger.info(f"處理完成，共產生 {len(separated_files)} 個分離後的音檔")
+            
+            # 步驟5: 顯示錄音結果
+            print(f"\n原始混合音檔: {mixed_audio_file}")
+            print(f"分離後的音檔已保存至: {OUTPUT_DIR}")
+            
+            # 步驟6: 恢復原始標準輸出
+            speaker_id.restore_stdout()
+            
+        elif choice == "2":
+            # 使用從 speaker_manager 模組導入的函數
+            # 啟動說話者管理系統
+            speaker_manager.main()
         
-        # 步驟3: 錄音並進行語者分離 (分離的同時進行識別)
-        # 注意：識別功能已整合到 separate_and_identify 方法中
-        logger.info("開始錄音並執行即時分離與識別...")
-        mixed_audio_file = separator.record_and_process(OUTPUT_DIR)
-        
-        # 步驟4: 錄音結束後的摘要
-        separated_files = separator.get_output_files()
-        logger.info(f"處理完成，共產生 {len(separated_files)} 個分離後的音檔")
-        
-        # 步驟5: 顯示錄音結果
-        print(f"\n原始混合音檔: {mixed_audio_file}")
-        print(f"分離後的音檔已保存至: {OUTPUT_DIR}")
-        
-        # 步驟6: 恢復原始標準輸出
-        speaker_id.restore_stdout()
-        
+        else:
+            print("無效的選擇")
+            
     except KeyboardInterrupt:
         logger.info("\n接收到停止信號")
         if 'separator' in locals():

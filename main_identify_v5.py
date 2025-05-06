@@ -3,7 +3,7 @@
 語者識別引擎 (Speaker Identification Engine)
 ===============================================================================
 
-版本：v5.1.0    (新增音訊流接口)
+版本：v5.1.2    (可從外部傳入時間戳、新增多聲紋映射到單個說話者的功能)
 作者：CYouuu
 最後更新：2025-05-04
 
@@ -48,7 +48,7 @@
  4. 添加音檔到指定說話者:
     ```python
     identifier = SpeakerIdentifier()
-    identifier.add_embedding_to_existing_speaker("path/to/audio.wav", "speaker_uuid")
+    identifier.add_voiceprint_to_speaker("path/to/audio.wav", "speaker_uuid")
     ```
 
  5. 使用speaker_system_v2.py進行語者識別模組呼叫
@@ -64,7 +64,7 @@
 -----------
  - _ENABLE_OUTPUT = False: 控制模組是否輸出訊息 (預設False不輸出)
  - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
- - THRESHOLD_UPDATE = 0.34: 相似度足夠，更新向量
+ - THRESHOLD_UPDATE = 0.35: 下:更新聲紋向量，上:新增一筆聲紋到語者
  - THRESHOLD_NEW = 0.39: 超過此值視為新語者
 
 詳細資訊：
@@ -85,13 +85,14 @@ from scipy.spatial.distance import cosine
 from scipy.signal import resample_poly
 import warnings
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Tuple, List, Dict, Optional, Union, Any
 import weaviate  # type: ignore
 from weaviate.classes.query import MetadataQuery # type: ignore
+from weaviate.classes.query import QueryReference # type: ignore
 
 # 控制輸出的全局變數
-_ENABLE_OUTPUT = False  # 預設為 False，即不輸出詳細訊息
+_ENABLE_OUTPUT = True  # 預設為 False，即不輸出詳細訊息
 
 # 保存原始 print 函數的引用
 original_print = print
@@ -142,14 +143,16 @@ def format_rfc3339(dt: Optional[datetime] = None) -> str:
     Returns:
         str: RFC3339 格式的日期時間字串
     """
+    taipei_tz = timezone(timedelta(hours=8))  # 台北是 UTC+8
+
     if dt is None:
-        dt = datetime.now(timezone.utc)
+        dt = datetime.now(taipei_tz)
     elif dt.tzinfo is None:
-        # 若沒有時區信息，則假設為 UTC
-        dt = dt.replace(tzinfo=timezone.utc)
+        # 若沒有時區信息，則假設為台北時區
+        dt = dt.replace(tzinfo=taipei_tz)
     
-    # 格式化為 RFC3339 格式: YYYY-MM-DDThh:mm:ss.sssZ
-    return dt.isoformat().replace('+00:00', 'Z')
+    # 格式化為 RFC3339 格式
+    return dt.isoformat()
 
 # 隱藏多餘的警告與日誌
 warnings.filterwarnings("ignore")
@@ -209,7 +212,7 @@ from speechbrain.inference import SpeakerRecognition
 
 # 全域參數設定
 THRESHOLD_LOW = 0.26     # 過於相似，不更新
-THRESHOLD_UPDATE = 0.34  # 更新嵌入向量
+THRESHOLD_UPDATE = 0.34  # 下:更新嵌入向量，上:新增一筆聲紋
 THRESHOLD_NEW = 0.39    # 判定為新說話者
 DEFAULT_SPEAKER_NAME = "未命名說話者"  # 預設的說話者名稱
 
@@ -634,18 +637,6 @@ class WeaviateRepository:
             print(f"處理新說話者時發生錯誤: {e}")
             raise
     
-    def match_speaker(self, voice_print_id: str, speaker_name: str, best_distance: float) -> None:
-        """
-        匹配到說話者但不進行更新
-        
-        Args:
-            voice_print_id: 匹配到的聲紋向量 ID
-            speaker_name: 說話者名稱
-            best_distance: 最佳匹配的距離
-        """
-        print(f"(匹配) 該音檔與說話者 {speaker_name} 的聲紋向量 (ID: {voice_print_id}) 相似 "
-              f"(距離 = {best_distance:.4f})，但未進行更新。")
-    
     def get_voice_print_properties(self, voice_print_id: str, properties: List[str]) -> Optional[Dict[str, Any]]:
         """
         獲取聲紋向量的屬性
@@ -799,21 +790,6 @@ class SpeakerIdentifier:
             print(f"更新嵌入向量時發生錯誤: {e}")
             raise
     
-    def _handle_match_only(self, best_id: str, best_name: str, best_distance: float) -> Tuple[str, str, float]:
-        """
-        處理僅匹配但不更新的情況
-        
-        Args:
-            best_id: 最佳匹配ID
-            best_name: 最佳匹配說話者名稱
-            best_distance: 最佳匹配距離
-            
-        Returns:
-            Tuple[str, str, float]: (說話者ID, 說話者名稱, 相似度)
-        """
-        self.database.match_speaker(best_id, best_name, best_distance)
-        return best_id, best_name, best_distance
-    
     def _handle_new_speaker(self, new_embedding: np.ndarray, audio_source: str = "", timestamp: Optional[datetime] = None) -> Tuple[str, str, float]:
         """
         處理新說話者的情況：創建新說話者
@@ -829,6 +805,128 @@ class SpeakerIdentifier:
         speaker_id, voice_print_id, speaker_name = self.database.handle_new_speaker(new_embedding, audio_source, timestamp, timestamp)
         return speaker_id, speaker_name, -1  # -1 表示全新的說話者
     
+    def _handle_add_new_voiceprint_to_speaker(self, best_id: str, best_name: str, best_distance: float, new_embedding: np.ndarray, audio_source: str = "", timestamp: Optional[datetime] = None) -> Tuple[str, str, float]:
+        """
+        處理相似但不更新原有聲紋的情況：為現有說話者新增額外的聲紋向量
+        
+        此方法提供更完整的封裝，將新嵌入向量添加到已匹配的說話者，但建立為獨立的聲紋向量
+        而非更新現有向量。這允許一個說話者擁有多個不同環境或條件下的聲紋
+        
+        Args:
+            best_id: 最佳匹配的聲紋向量ID
+            best_name: 最佳匹配說話者名稱
+            best_distance: 最佳匹配距離
+            new_embedding: 新的嵌入向量
+            audio_source: 音訊來源描述 (可選)
+            timestamp: 音訊的時間戳記，用於設定聲紋的創建與更新時間 (可選)
+            
+        Returns:
+            Tuple[str, str, float]: (說話者ID, 說話者名稱, 相似度)
+        """
+        try:
+            # 從聲紋獲取所屬的說話者ID
+            speaker_id = self._get_speaker_id_from_voiceprint(best_id)
+            
+            # 為此說話者新增一個新的聲紋向量
+            voice_print_id = self._add_voiceprint_to_speaker(
+                speaker_id=speaker_id,
+                speaker_name=best_name,
+                new_embedding=new_embedding,
+                audio_source=audio_source,
+                timestamp=timestamp
+            )
+            
+            if self.verbose:
+                print(f"(新增聲紋) 已為說話者 {best_name} 建立新的聲紋向量 (ID: {voice_print_id})")
+                print(f"該音檔與說話者 {best_name} 相似但不足以更新原有聲紋，已建立新的聲紋。")
+            
+            return speaker_id, best_name, best_distance
+            
+        except Exception as e:
+            print(f"新增額外聲紋向量時發生錯誤: {e}")
+            raise
+    
+    def _get_speaker_id_from_voiceprint(self, voice_print_id: str) -> str:
+        """
+        根據聲紋向量ID獲取對應的說話者ID
+        
+        Args:
+            voice_print_id: 聲紋向量ID
+            
+        Returns:
+            str: 說話者ID
+            
+        Raises:
+            ValueError: 當無法獲取說話者ID時
+        """
+        try:
+            voice_print_collection = self.database.client.collections.get("VoicePrint")
+            # 使用 QueryReference 指定要回傳哪個 reference 屬性，以及要哪些欄位
+            qr = QueryReference(
+                link_on="speaker",            # reference 欄位名稱
+                return_properties=["uuid"]    # 要把 uuid 回傳下來
+            )
+            # 呼叫 fetch_object_by_id，傳入 qr 而非字串列表
+            voice_print_obj = voice_print_collection.query.fetch_object_by_id(
+                uuid=voice_print_id,
+                return_references=qr
+            )
+            # 從回傳的 references 取出第一個 speaker 的 uuid
+            refs = voice_print_obj.references.get("speaker", []).objects
+            if not refs:
+                raise ValueError(f"聲紋向量 {voice_print_id} 沒有對應的說話者參考")
+            return refs[0].uuid
+        except Exception as e:
+            print(f"獲取說話者ID時發生錯誤: {e}")
+            raise
+    
+    def _add_voiceprint_to_speaker(self, speaker_id: str, speaker_name: str, new_embedding: np.ndarray, 
+                                   audio_source: str = "", timestamp: Optional[datetime] = None) -> str:
+        """
+        為指定說話者添加新的聲紋向量
+        
+        Args:
+            speaker_id: 說話者ID
+            speaker_name: 說話者名稱
+            new_embedding: 新的嵌入向量
+            audio_source: 音訊來源描述 (可選)
+            timestamp: 時間戳記，用於設定創建與更新時間 (可選)
+            
+        Returns:
+            str: 新建立的聲紋向量ID
+        """
+        try:
+            # 格式化時間或使用當前時間
+            create_time_str = format_rfc3339(timestamp) if timestamp else format_rfc3339()
+            
+            # 添加新的嵌入向量到說話者
+            voice_print_collection = self.database.client.collections.get("VoicePrint")
+            voice_print_id = str(uuid.uuid4())
+            
+            # 創建新的聲紋向量
+            voice_print_collection.data.insert(
+                properties={
+                    "create_time": create_time_str,
+                    "updated_time": create_time_str,
+                    "update_count": 1,
+                    "speaker_name": speaker_name,
+                    "audio_source": audio_source
+                },
+                uuid=voice_print_id,
+                vector=new_embedding.tolist(),
+                references={
+                    "speaker": [speaker_id]
+                }
+            )
+            
+            # 更新說話者的聲紋向量列表
+            self.database.update_speaker_voice_prints(speaker_id, voice_print_id)
+            
+            return voice_print_id
+        except Exception as e:
+            print(f"為說話者添加聲紋向量時發生錯誤: {e}")
+            raise
+
     # 簡化輸出的控制函數
     def simplified_print(self, message: str, verbose: bool = True) -> None:
         """
@@ -923,8 +1021,8 @@ class SpeakerIdentifier:
                 # 距離在允許的範圍內，更新嵌入向量
                 return self._handle_update_embedding(best_id, best_name, best_distance, new_embedding)
             elif best_distance < self.threshold_new:
-                # 距離在匹配範圍內，但不更新
-                return self._handle_match_only(best_id, best_name, best_distance)
+                # 距離在匹配範圍內，建立新的聲紋向量
+                return self._handle_add_new_voiceprint_to_speaker(best_id, best_name, best_distance, new_embedding, audio_source, timestamp)
             else:
                 # 判定為新說話者
                 # 傳遞音訊來源名稱和時間戳記
@@ -1005,9 +1103,12 @@ class SpeakerIdentifier:
         
         return results
     
-    def add_embedding_to_existing_speaker(self, audio_file: str, speaker_id: str) -> bool:
+    def add_voiceprint_to_speaker(self, audio_file: str, speaker_id: str) -> bool:
         """
-        添加音檔的嵌入向量到現有的說話者，但不進行加權平均更新
+        將音檔轉換為聲紋向量，並添加到指定的說話者
+        
+        此方法提供一個公開介面，允許直接從音訊檔案為已知說話者添加新的聲紋向量，
+        而不需要進行說話者識別的比對過程。適用於已確定說話者身份的音檔。
         
         Args:
             audio_file: 音檔路徑
@@ -1017,7 +1118,7 @@ class SpeakerIdentifier:
             bool: 是否成功添加
         """
         try:
-            print(f"\n添加音檔嵌入向量到說話者 (ID: {speaker_id}): {audio_file}")
+            print(f"\n添加音檔聲紋向量到說話者 (ID: {speaker_id}): {audio_file}")
             if not os.path.exists(audio_file):
                 print(f"音檔 {audio_file} 不存在，取消處理。")
                 return False
@@ -1038,24 +1139,22 @@ class SpeakerIdentifier:
             # 提取嵌入向量
             new_embedding = self.audio_processor.extract_embedding(audio_file)
             
-            # 添加新的嵌入向量到說話者
-            voice_print_id = self.database.add_embedding_without_averaging(
-                speaker_name, new_embedding, speaker_id)
+            # 使用內部方法添加聲紋向量
+            voice_print_id = self._add_voiceprint_to_speaker(
+                speaker_id=speaker_id,
+                speaker_name=speaker_name,
+                new_embedding=new_embedding,
+                audio_source=os.path.basename(audio_file)
+            )
             
-            # 更新說話者的聲紋向量列表
-            success = self.database.update_speaker_voice_prints(speaker_id, voice_print_id)
-            
-            if success:
-                print(f"已成功將音檔嵌入向量添加到說話者 {speaker_name}")
-            
-            return success
+            if voice_print_id:
+                print(f"已成功將音檔聲紋向量添加到說話者 {speaker_name} (聲紋ID: {voice_print_id})")
+                return True
+            return False
                 
         except Exception as e:
-            print(f"添加嵌入向量時發生錯誤: {e}")
+            print(f"添加聲紋向量時發生錯誤: {e}")
             return False
-        finally:
-            # 關閉 Weaviate 連接
-            self.database.close()
 
 
 if __name__ == "__main__":
@@ -1083,5 +1182,5 @@ if __name__ == "__main__":
     # identifier.process_audio_directory("testFiles/test_audioFile/0770")
     restore_stdout()
     
-    # 如果需要將嵌入向量添加到現有說話者，可解除下列註解
-    # identifier.add_embedding_to_existing_speaker("path_to_audio.wav", "speaker_uuid")
+    # 如果需要將音檔提取聲紋並添加到現有說話者，可解除下列註解
+    # identifier.add_voiceprint_to_speaker("path_to_audio.wav", "speaker_uuid")
