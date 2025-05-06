@@ -17,7 +17,7 @@ import uuid
 import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone, timedelta
-from weaviate.classes.query import Filter
+from weaviate.classes.query import Filter # type: ignore
 
 try:
     import weaviate  # type: ignore
