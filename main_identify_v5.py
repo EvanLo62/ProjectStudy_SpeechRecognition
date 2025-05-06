@@ -5,7 +5,7 @@
 
 版本：v5.1.2    (可從外部傳入時間戳、新增多聲紋映射到單個說話者的功能)
 作者：CYouuu
-最後更新：2025-05-06
+最後更新：2025-05-07
 
 功能摘要：
 -----------
@@ -24,6 +24,10 @@
  - 向量資料庫: Weaviate
  - 取樣率自適應: 自動處理 8kHz/16kHz/44.1kHz 等常見取樣率
  - 向量更新策略: 加權移動平均，保持聲紋向量穩定性
+
+更新歷程：
+-----------
+ - v5.1.2 (2025-05-06): 新增多聲紋映射功能、支援外部傳入時間戳記、優化使用體驗
 
 使用方式：
 -----------
@@ -53,6 +57,12 @@
 
  5. 使用speaker_system_v2.py進行語者識別模組呼叫
 
+閾值參數設定：
+-----------
+ - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
+ - THRESHOLD_UPDATE = 0.34: 下:更新聲紋向量，上:新增一筆聲紋到語者
+ - THRESHOLD_NEW = 0.39: 超過此值視為新語者
+
 前置需求：
 -----------
  - Python 3.9+
@@ -60,12 +70,11 @@
  - Weaviate 向量資料庫 (需通過 Docker 啟動)
  - NumPy, PyTorch, SoundFile 等相關處理套件
 
- 系統參數：
+注意事項：
 -----------
- - _ENABLE_OUTPUT = False: 控制模組是否輸出訊息 (預設False不輸出)
- - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
- - THRESHOLD_UPDATE = 0.35: 下:更新聲紋向量，上:新增一筆聲紋到語者
- - THRESHOLD_NEW = 0.39: 超過此值視為新語者
+ - 使用前請確保 Weaviate 已啟動並初始化必要集合
+ - 建議處理 16kHz 取樣率的音檔以獲得最佳識別效果
+ - 對於批量處理，可調整閾值以符合不同應用場景
 
 詳細資訊：
 -----------
@@ -92,7 +101,7 @@ from weaviate.classes.query import MetadataQuery # type: ignore
 from weaviate.classes.query import QueryReference # type: ignore
 
 # 控制輸出的全局變數
-_ENABLE_OUTPUT = True  # 預設為 False，即不輸出詳細訊息
+_ENABLE_OUTPUT =False  # 預設為 False，即不輸出詳細訊息
 
 # 保存原始 print 函數的引用
 original_print = print

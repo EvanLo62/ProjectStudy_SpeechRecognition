@@ -3,9 +3,9 @@
 即時語者分離與識別系統 (Real-time Speech Separation and Speaker Identification System)
 ===============================================================================
 
-版本：v2.1.5    (新增語者管理功能)
+版本：v2.1.5    (新增語者管理功能、修正識別邏輯)
 作者：CYouuu, EvanLo62
-最後更新：2025-05-06
+最後更新：2025-05-07
 
 功能摘要：
 -----------
@@ -16,7 +16,11 @@
  2. 語者分離：能夠將多位語者的混合語音分離成獨立的音檔
  3. 即時識別：分離後立即進行語者識別，顯示實時識別結果
  4. 聲紋更新：自動更新語者聲紋向量，提高識別準確率
- 5. 說話者管理：獨立模組化的語者與聲紋管理功能
+ 5. 語者管理：獨立模組化的語者與聲紋管理功能
+
+** 重要說明 **：目前使用的語者分離模型是 SpeechBrain 的 16kHz 雙說話者 (2人) 預訓練模型，
+因此本系統使用時只能分離兩個說話者的混合語音。若有三人或更多人同時說話的情況，
+系統會將其合併為兩個主要聲源或可能造成分離效果不佳。
  
 系統模組架構：
 -----------
@@ -26,8 +30,8 @@
 
 技術架構：
 -----------
- - 語者分離模型: SpeechBrain Sepformer (16kHz)
- - 語者識別模型: SpeechBrain ECAPA-TDNN 模型
+ - 語者分離模型: SpeechBrain Sepformer (16kHz 雙聲道分離)
+ - 語者識別模型: SpeechBrain ECAPA-TDNN 模型 (192維特徵向量)
  - 向量資料庫: Weaviate，用於儲存和檢索說話者嵌入向量
  - 即時處理: 多執行緒並行處理，邊錄音邊識別
  - 音訊增強: 頻譜閘控降噪，提高分離品質
@@ -178,7 +182,7 @@ class CustomFormatter(logging.Formatter):
             log_fmt = '%(message)s'
         else:
             # 標準輸出，添加時間和級別
-            log_fmt = '[%(asctime)s] %(levelname)s: %(message)s'
+            log_fmt = '[%(asctime)s] %(level別: %(message)s'
         
         # 設置格式字串
         self._style._fmt = log_fmt
