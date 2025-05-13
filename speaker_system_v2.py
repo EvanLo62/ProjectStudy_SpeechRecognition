@@ -180,9 +180,8 @@ class CustomFormatter(logging.Formatter):
         if hasattr(record, 'simple') and record.simple:
             # 簡單輸出，無前綴
             log_fmt = '%(message)s'
-        else:
-            # 標準輸出，添加時間和級別
-            log_fmt = '[%(asctime)s] %(level別: %(message)s'
+        else:            # 標準輸出，添加時間和級別
+            log_fmt = '[%(asctime)s] %(levelname)s: %(message)s'
         
         # 設置格式字串
         self._style._fmt = log_fmt
