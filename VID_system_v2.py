@@ -1,11 +1,12 @@
 """
 ===============================================================================
+Voice_ID
 即時語者分離與識別系統 (Real-time Speech Separation and Speaker Identification System)
 ===============================================================================
 
-版本：v2.1.5    (新增語者管理功能、修正識別邏輯)
+版本：v2.1.6
 作者：CYouuu, EvanLo62
-最後更新：2025-05-07
+最後更新：2025-05-16
 
 功能摘要：
 -----------
@@ -48,7 +49,7 @@ Weaviate 資料庫設定：
    ```
  - 若要匯入現有語者嵌入向量，可執行：
    ```
-   python weaviate_study/npy_to_weaviate.py
+   python weaviate_studY/npy_to_weaviate.py
    ```
 
 處理流程：
@@ -81,7 +82,7 @@ Weaviate 資料庫設定：
 -----------
  - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
  - THRESHOLD_UPDATE = 0.34: 相似度足夠，更新向量
- - THRESHOLD_NEW = 0.39: 超過此值視為新語者
+ - THRESHOLD_NEW = 0.385: 超過此值視為新語者
  - WINDOW_SIZE = 6: 處理窗口大小（秒）
  - OVERLAP = 0.5: 窗口重疊率
 
@@ -99,7 +100,6 @@ Weaviate 資料庫設定：
 """
 
 import os
-import sys
 import numpy as np
 import torch
 import torchaudio
@@ -112,11 +112,14 @@ from speechbrain.inference import SepformerSeparation as separator
 from speechbrain.inference import SpeakerRecognition
 import noisereduce as nr # type: ignore
 
+# 導入日誌模組
+from VID_logger import get_logger
+
 # 導入 main_identify_v5 模組
-import main_identify_v5 as speaker_id
+import VID_identify_v5 as speaker_id
 
 # 導入語者管理模組
-import speaker_manager
+import VID_manager
 
 # 基本錄音參數
 CHUNK = 1024
@@ -142,110 +145,9 @@ THRESHOLD_NEW = speaker_id.THRESHOLD_NEW    # 判定為新說話者
 OUTPUT_DIR = "16K-model/Audios-16K-IDTF"
 IDENTIFIED_DIR = "16K-model/Identified-Speakers"
 
-# 自訂日誌格式，移除多餘前綴
-class CustomFormatter(logging.Formatter):
-    """自訂日誌格式，根據日誌級別使用不同顏色"""
-    
-    # 不同日誌級別的顏色代碼
-    COLORS = {
-        logging.DEBUG: '\033[94m',     # 藍色
-        logging.INFO: '\033[92m',      # 綠色
-        logging.WARNING: '\033[93m',   # 黃色
-        logging.ERROR: '\033[91m',     # 紅色
-        logging.CRITICAL: '\033[41m',  # 紅底
-    }
-    RESET = '\033[0m'  # 結束顏色
-    
-    def __init__(self, use_color: bool = True) -> None:
-        """
-        初始化格式器
-        
-        Args:
-            use_color: 是否使用顏色輸出
-        """
-        super().__init__(fmt='%(message)s', datefmt='%H:%M:%S')
-        self.use_color = use_color
-    
-    def format(self, record: logging.LogRecord) -> str:
-        """
-        格式化日誌記錄
-        
-        Args:
-            record: 日誌記錄物件
-            
-        Returns:
-            str: 格式化後的日誌字串
-        """
-        # 根據時間和級別生成前綴
-        if hasattr(record, 'simple') and record.simple:
-            # 簡單輸出，無前綴
-            log_fmt = '%(message)s'
-        else:            # 標準輸出，添加時間和級別
-            log_fmt = '[%(asctime)s] %(levelname)s: %(message)s'
-        
-        # 設置格式字串
-        self._style._fmt = log_fmt
-        
-        # 如果使用顏色，則為不同級別設置顏色
-        if self.use_color and not (hasattr(record, 'simple') and record.simple):
-            color = self.COLORS.get(record.levelno, '')
-            reset = self.RESET
-            record.levelname = f"{color}{record.levelname}{reset}"
-        
-        result = super().format(record)
-        return result
-
-# 設定日誌系統
-def setup_logging(log_file: str = "system_output.log", 
-                 console_level: int = logging.INFO, 
-                 file_level: int = logging.DEBUG) -> logging.Logger:
-    """
-    設定日誌系統，同時輸出到控制台和文件
-    
-    Args:
-        log_file: 日誌文件路徑
-        console_level: 控制台輸出的日誌級別
-        file_level: 文件輸出的日誌級別
-        
-    Returns:
-        logging.Logger: 配置好的日誌物件
-    """
-    # 重要：關閉 root logger 的傳播，避免重複輸出
-    logging.getLogger().handlers = []
-    
-    # 創建日誌物件
-    logger = logging.getLogger("speaker_system")
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False  # 重要：關閉傳播以避免重複輸出
-    
-    # 清除現有的處理器
-    if logger.handlers:
-        logger.handlers.clear()
-    
-    # 控制台處理器
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(CustomFormatter(use_color=True))
-    
-    # 文件處理器
-    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
-    file_handler.setLevel(file_level)
-    file_handler.setFormatter(logging.Formatter(
-        '[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    
-    # 添加處理器到日誌物件
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-    
-    # 設置 SpeechBrain 和其他庫的日誌級別
-    logging.getLogger("speechbrain").setLevel(logging.WARNING)
-    
-    return logger
-
 # 初始化日誌系統
-logger = setup_logging()
+logger = get_logger("VoiceID.main", "system_output.log", append_mode=True)
+
 
 # ================== 語者分離部分 ======================
 
@@ -389,6 +291,9 @@ class AudioSeparator:
         mixed_audio_buffer = []
         
         try:
+            # 步驟0: 初始化語者識別器
+            identifier = SpeakerIdentifier()
+
             # 步驟1: 初始化錄音裝置
             p = pyaudio.PyAudio()
             stream = p.open(
@@ -585,7 +490,7 @@ class AudioSeparator:
                     result_message.append(f"【{audio_name} → {result}】")
                 
                 if result_message:
-                    message = f"片段 {segment_index} 識別結果:\n" + "\n".join(result_message)
+                    message = f"片段 {segment_index} 識別結果:  " + "  ".join(result_message)
                     logger.info(
                         message,
                         extra={"simple": True}
@@ -697,7 +602,7 @@ class SpeakerIdentifier:
             logger.error(f"處理音訊流時發生錯誤：{e}")
         
         return results
-
+    
 def check_weaviate_connection() -> bool:
     """
     檢查 Weaviate 資料庫連線狀態。
@@ -719,80 +624,3 @@ def check_weaviate_connection() -> bool:
     except Exception as e:
         logger.error(f"Weaviate 連線失敗：{e}")
         return False
-
-
-# 在main函數中添加選項以啟動說話者管理系統
-def main():
-    """
-    先分離再識別的主流程 - 即時版本
-    
-    這個版本下，語音分離和識別是並行處理的：
-    1. 語音分離後立即進行識別
-    2. 不需要等待所有音檔全部錄製完畢才開始識別
-    3. 可以實時顯示識別結果
-    """
-    try:
-        # 顯示主選單
-        print("\n" + "="*60)
-        print("語者分離與識別系統".center(56))
-        print("="*60)
-        print("1. 啟動即時語者分離與識別")
-        print("2. 管理說話者和聲紋")
-        print("0. 退出")
-        print("-"*60)
-        choice = input("請選擇操作 (0-2): ").strip()
-        
-        if choice == "0":
-            print("程式結束")
-            return
-        
-        elif choice == "1":
-            # 原有的即時識別功能
-            # 步驟1: 設定 v5 的日誌輸出
-            speaker_id.setup_logging(log_file="output_log.txt", mode="w")
-            logger.info("語者分離與識別系統啟動 (即時識別模式)")
-            
-            # 在啟動時檢查 Weaviate 連線狀態
-            if not check_weaviate_connection():
-                logger.critical("由於無法連線至 Weaviate 資料庫，程式將終止執行。")
-                return  # 直接結束程式
-            
-            # 步驟2: 初始化語者分離器
-            separator = AudioSeparator()
-            
-            # 步驟3: 錄音並進行語者分離 (分離的同時進行識別)
-            # 注意：識別功能已整合到 separate_and_identify 方法中
-            logger.info("開始錄音並執行即時分離與識別...")
-            mixed_audio_file = separator.record_and_process(OUTPUT_DIR)
-            
-            # 步驟4: 錄音結束後的摘要
-            separated_files = separator.get_output_files()
-            logger.info(f"處理完成，共產生 {len(separated_files)} 個分離後的音檔")
-            
-            # 步驟5: 顯示錄音結果
-            print(f"\n原始混合音檔: {mixed_audio_file}")
-            print(f"分離後的音檔已保存至: {OUTPUT_DIR}")
-            
-            # 步驟6: 恢復原始標準輸出
-            speaker_id.restore_stdout()
-            
-        elif choice == "2":
-            # 使用從 speaker_manager 模組導入的函數
-            # 啟動說話者管理系統
-            speaker_manager.main()
-        
-        else:
-            print("無效的選擇")
-            
-    except KeyboardInterrupt:
-        logger.info("\n接收到停止信號")
-        if 'separator' in locals():
-            separator.stop_recording()
-        speaker_id.restore_stdout()
-    except Exception as e:
-        logger.error(f"程式執行時發生錯誤：{e}")
-        speaker_id.restore_stdout()
-
-# 主程式進入點
-if __name__ == "__main__":
-    main()

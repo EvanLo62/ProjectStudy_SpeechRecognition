@@ -61,7 +61,7 @@
 -----------
  - THRESHOLD_LOW = 0.26: 過於相似，不更新向量
  - THRESHOLD_UPDATE = 0.34: 下:更新聲紋向量，上:新增一筆聲紋到語者
- - THRESHOLD_NEW = 0.39: 超過此值視為新語者
+ - THRESHOLD_NEW = 0.385: 超過此值視為新語者
 
 前置需求：
 -----------
@@ -101,21 +101,32 @@ from weaviate.classes.query import MetadataQuery # type: ignore
 from weaviate.classes.query import QueryReference # type: ignore
 
 # 控制輸出的全局變數
-_ENABLE_OUTPUT =False  # 預設為 False，即不輸出詳細訊息
+_ENABLE_OUTPUT =True  # 預設為 True，即輸出詳細訊息
 
 # 保存原始 print 函數的引用
 original_print = print
 
-# 輸出控制函數
+# 輸出控制函數 - 更新為使用日誌系統
 def _print(*args, **kwargs) -> None:
     """
-    受控輸出函數，只有當 _ENABLE_OUTPUT 為 True 時才會輸出
+    受控輸出函數，使用日誌系統輸出
     
     Args:
         *args: print 函數的位置參數
         **kwargs: print 函數的關鍵字參數
     """
+    # 導入 logger 可能在函數第一次調用時尚未定義
+    # 因此在這裡做一個檢查和默認值處理
+    global logger
+    if 'logger' not in globals() or logger is None:
+        from VID_logger import get_logger
+        logger = get_logger("speaker_identify")
+        
     if _ENABLE_OUTPUT:
+        # 將多個參數轉換為單個字符串
+        message = " ".join(str(arg) for arg in args)
+        logger.info(message)
+        # 保留對終端的直接輸出以保持兼容性
         original_print(*args, **kwargs)
 
 # 設置輸出開關的函數
@@ -167,54 +178,11 @@ def format_rfc3339(dt: Optional[datetime] = None) -> str:
 warnings.filterwarnings("ignore")
 logging.getLogger("speechbrain").setLevel(logging.ERROR)
 
-# 自定義 Tee 類別：同時輸出到螢幕和 log 檔案
-class Tee:
-    def __init__(self, file_name: str, mode: str = "w") -> None:
-        """
-        初始化 Tee 實例，用於同時輸出到螢幕和檔案
-        
-        Args:
-            file_name: 輸出日誌檔名
-            mode: 檔案開啟模式，預設為 'w' (覆寫)
-        """
-        self.file = open(file_name, mode, encoding="utf-8")
-        self.stdout = sys.stdout
+# 導入日誌模組
+from VID_logger import get_logger
 
-    def write(self, message: str) -> None:
-        """
-        寫入訊息到檔案和螢幕
-        
-        Args:
-            message: 要輸出的訊息
-        """
-        self.file.write(message)
-        self.stdout.write(message)
-
-    def flush(self) -> None:
-        """
-        強制刷新檔案和螢幕輸出緩衝
-        """
-        self.file.flush()
-        self.stdout.flush()
-
-# 日誌設定函數，可由外部調用
-def setup_logging(log_file: str = "output_log.txt", mode: str = "w") -> None:
-    """
-    設定日誌輸出
-    
-    Args:
-        log_file: 日誌檔案路徑
-        mode: 檔案開啟模式
-    """
-    global _original_stdout
-    _original_stdout = sys.stdout
-    sys.stdout = Tee(log_file, mode)
-
-# 恢復原始標準輸出
-def restore_stdout() -> None:
-    """恢復原始標準輸出"""
-    if '_original_stdout' in globals() and _original_stdout is not None:
-        sys.stdout = _original_stdout
+# 創建模組專屬日誌器
+logger = get_logger("Voice_ID.identify")
 
 # 載入 SpeechBrain 語音辨識模型
 from speechbrain.inference import SpeakerRecognition
@@ -222,7 +190,7 @@ from speechbrain.inference import SpeakerRecognition
 # 全域參數設定
 THRESHOLD_LOW = 0.26     # 過於相似，不更新
 THRESHOLD_UPDATE = 0.34  # 下:更新嵌入向量，上:新增一筆聲紋
-THRESHOLD_NEW = 0.39    # 判定為新說話者
+THRESHOLD_NEW = 0.385    # 判定為新說話者
 DEFAULT_SPEAKER_NAME = "未命名說話者"  # 預設的說話者名稱
 
 # Weaviate 連接參數（如果需要可以修改）
@@ -1173,7 +1141,6 @@ if __name__ == "__main__":
     identifier = SpeakerIdentifier()
     
     # 主程式執行: 若要處理單一檔案或資料夾，可解除下列註解
-    setup_logging()
 
     # 範例：處理單一檔案 (現在會透過 process_audio_stream)
     identifier.process_audio_file("16K-model/Audios-16K-IDTF/speaker1_20250501-22_49_13_1.wav")
@@ -1189,7 +1156,6 @@ if __name__ == "__main__":
 
 
     # identifier.process_audio_directory("testFiles/test_audioFile/0770")
-    restore_stdout()
     
     # 如果需要將音檔提取聲紋並添加到現有說話者，可解除下列註解
     # identifier.add_voiceprint_to_speaker("path_to_audio.wav", "speaker_uuid")

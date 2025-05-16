@@ -3,9 +3,9 @@
 語者與聲紋管理系統 (Speaker and Voiceprint Management System)
 ===============================================================================
 
-版本：v1.0.0 
+版本：v1.1.0 
 作者：CYouuu
-最後更新：2025-05-07
+最後更新：2025-05-16
 
 功能摘要：
 -----------
@@ -20,7 +20,7 @@ CLI 互動介面與資料操作分離，結構現代、易於維護。主要功�
 
 技術架構：
 -----------
- - 資料庫：Weaviate 向量資料庫
+ - 資料庫：Weaviate 向量資料庫 (透過 VID_database 抽象層存取)
  - 介面：基於命令列的互動式介面
  - 架構：模組化設計，分離核心邏輯與介面層
 
@@ -63,24 +63,18 @@ import uuid
 import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone, timedelta
-from weaviate.classes.query import Filter # type: ignore
-
-try:
-    import weaviate  # type: ignore
-except ImportError:
-    print("請先安裝 weaviate-client：pip install weaviate-client")
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Logging 設定
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s:%(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[logging.StreamHandler(sys.stderr)],
+from VID_logger import get_logger
+
+# 創建本模組的日誌器
+logger = get_logger(
+    name="Voice_ID.manager", 
+    log_file="system_output.log", 
+    append_mode=True
 )
-logger = logging.getLogger("speaker_manager")
 
 # ---------------------------------------------------------------------------
 # UUID 工具
@@ -92,48 +86,35 @@ def valid_uuid(value: str) -> bool:
     return bool(UUID_PATTERN.match(value))
 
 # ---------------------------------------------------------------------------
-# SpeakerManager (Weaviate 操作)
+# SpeakerManager (資料庫操作)
 # ---------------------------------------------------------------------------
 
 class SpeakerManager:
     """
-    封裝所有與 Weaviate 資料庫互動的語者管理操作。
+    封裝所有與資料庫互動的語者管理操作。
+    使用 VID_database 模組提供的 DatabaseService 作為統一接口。
     """
-    CLASS_NAME = "Speaker"
-    VP_CLASS_NAME = "VoicePrint"
 
-    def __init__(self, client: weaviate.WeaviateClient):
-        self._client = client
-
+    def __init__(self):
+        # 使用 DatabaseService 作為統一接口
+        from VID_database import DatabaseService
+        self._db = DatabaseService()
+        
     def list_all_speakers(self) -> List[Dict[str, Any]]:
         """列出所有說話者。"""
         try:
-            results = (
-                self._client.collections.get(self.CLASS_NAME)
-                .query.fetch_objects()
-            )
-            speakers: List[Dict[str, Any]] = []
-            for obj in results.objects:
-                speakers.append({
-                    "uuid": str(obj.uuid),
-                    "name": obj.properties.get("name", "未命名"),
-                    "create_time": obj.properties.get("create_time", "未知"),
-                    "last_active_time": obj.properties.get("last_active_time", "未知"),
-                    "voiceprint_count": len(obj.properties.get("voiceprint_ids", [])),
-                })
-            speakers.sort(key=lambda s: s["last_active_time"], reverse=True)
+            speakers = self._db.list_all_speakers()
+            # 使用 DatabaseService 的接口只需排序後返回即可
+            speakers.sort(key=lambda s: s.get("last_active_time", ""), reverse=True)
             return speakers
         except Exception as exc:
             logger.error(f"列出說話者時發生錯誤: {exc}")
             return []
-
+            
     def get_speaker(self, speaker_uuid: str) -> Optional[Any]:
         """取得單一說話者物件。"""
         try:
-            return (
-                self._client.collections.get(self.CLASS_NAME)
-                .query.fetch_object_by_id(uuid=speaker_uuid)
-            )
+            return self._db.get_speaker(speaker_uuid)
         except Exception as exc:
             logger.error(f"獲取說話者詳細資訊時發生錯誤: {exc}")
             return None
@@ -143,23 +124,7 @@ class SpeakerManager:
         更改說話者名稱，並同步更新所有該語者底下聲紋的 speaker_name。
         """
         try:
-            # 1.先更新 Speaker 本身
-            sp_col = self._client.collections.get(self.CLASS_NAME)
-            sp_col.data.update(uuid=speaker_uuid, properties={"name": new_name})
-
-            # 2.拿回這個 Speaker 物件，讀出 voiceprint_ids
-            sp_obj = sp_col.query.fetch_object_by_id(uuid=speaker_uuid)
-            vp_ids = sp_obj.properties.get("voiceprint_ids", [])
-
-            # 3.逐一更新每支 VoicePrint
-            vp_col = self._client.collections.get(self.VP_CLASS_NAME)
-            for vp_id in vp_ids:
-                vp_col.data.update(
-                    uuid=vp_id,
-                    properties={"speaker_name": new_name}
-                )
-
-            return True
+            return self._db.update_speaker_name(speaker_uuid, new_name)
         except Exception as exc:
             logger.error(f"更改說話者名稱時發生錯誤: {exc}")
             return False
@@ -167,9 +132,7 @@ class SpeakerManager:
     def delete_speaker(self, speaker_uuid: str) -> bool:
         """刪除說話者。"""
         try:
-            collection = self._client.collections.get(self.CLASS_NAME)
-            collection.data.delete_by_id(uuid=speaker_uuid)
-            return True
+            return self._db.delete_speaker(speaker_uuid)
         except Exception as exc:
             logger.error(f"刪除說話者時發生錯誤: {exc}")
             return False
@@ -182,46 +145,79 @@ class SpeakerManager:
         若來源說話者已無聲紋，則自動刪除該說話者。
         """
         try:
-            collection = self._client.collections.get(self.CLASS_NAME)
-            src_obj = collection.query.fetch_object_by_id(uuid=source_uuid)
-            dest_obj = collection.query.fetch_object_by_id(uuid=dest_uuid)
-            if not src_obj or not dest_obj:
-                logger.warning("來源或目標說話者不存在。")
-                return False
-            src_vps = set(src_obj.properties.get("voiceprint_ids", []))
-            dest_vps = set(dest_obj.properties.get("voiceprint_ids", []))
-            move_set = src_vps if voiceprint_ids is None else set(voiceprint_ids)
-            dest_vps.update(move_set)
-            src_vps.difference_update(move_set)
-            # 更新來源與目標說話者的聲紋
-            collection.data.update(uuid=source_uuid, properties={"voiceprint_ids": list(src_vps)})
-            collection.data.update(uuid=dest_uuid, properties={"voiceprint_ids": list(dest_vps)})
-            # 取得目標語者名稱
-            dest_name = dest_obj.properties.get("name", "未命名")
-            # 批次更新被轉移聲紋的 speaker_id 與 speaker_name
-            vp_collection = self._client.collections.get(self.VP_CLASS_NAME)
-            for vp_id in move_set:
-                try:
-                    vp_collection.data.update(uuid=vp_id, properties={
-                        "speaker_name": dest_name
-                    }, references={"speaker": [dest_uuid]})
-                except Exception as e:
-                    logger.error(f"轉移聲紋 {vp_id} 時發生錯誤: {e}")
-            # 若來源說話者已無聲紋，自動刪除
-            if not src_vps:
-                try:
-                    collection.data.delete_by_id(uuid=source_uuid)
-                    logger.info(f"來源說話者 {source_uuid} 已無聲紋，自動刪除。")
-                except Exception as del_exc:
-                    logger.error(f"自動刪除來源說話者時發生錯誤: {del_exc}")
-            return True
+            return self._db.transfer_voiceprints(source_uuid, dest_uuid, voiceprint_ids)
         except Exception as exc:
             logger.error(f"轉移聲紋時發生錯誤: {exc}")
             return False
 
     def cleanup(self) -> None:
-        """資料庫清理（示意）。"""
-        logger.info("呼叫成功 (功能尚未開發)")
+        """資料庫清理（示意、未實現）。"""
+        try:
+            self._db.database_cleanup()
+            logger.info("資料庫清理完成")
+        except Exception as exc:
+            logger.error(f"資料庫清理時發生錯誤: {exc}") 
+    
+    def check_and_repair_database(self) -> None:
+        """
+        資料庫檢查與修復（Database check & repair）：
+        1. 檢查每個 Speaker 的 voiceprint_ids 是否都存在並移除不存在的 ID
+        2. 檢查 VoicePrint 的 speaker_name／ReferenceProperty 是否正確並修正
+        3. 找出沒被任何 Speaker 參考的 VoicePrint
+        4. (可選) 自動掛回孤兒 VoicePrint；結果在 step4_relinked_vp
+        """
+        try:
+            report: Dict[str, Any] = self._db.check_and_repair_database()
+
+            # ── 封裝輸出邏輯 ───────────────────────────────────────────
+            messages = []
+
+            # Step 1
+            missing_vp = report.get("step1_missing_vp_count", 0)
+            if missing_vp:
+                messages.append(f"【步驟1】已移除 {missing_vp} 個不存在的 VoicePrint ID")
+            else:
+                messages.append("【步驟1】所有 Speaker 的 voiceprint_ids 均正常")
+
+            # Step 2
+            err_vps = report.get("step2_error_vp_ids", [])
+            if err_vps:
+                err_list = ", ".join(str(v)[:8] for v in err_vps)
+                messages.append(f"【步驟2】修正 {len(err_vps)} 個 VoicePrint 屬性異常：{err_list}")
+            else:
+                messages.append("【步驟2】所有 VoicePrint 屬性均正確")
+
+            # Step 3
+            orphan_vps = report.get("step3_unreferenced_vp_ids", [])
+            if orphan_vps:
+                orphan_list = ", ".join(str(v)[:8] for v in orphan_vps)
+                messages.append(f"【步驟3】{len(orphan_vps)} 個 VoicePrint 未被 Speaker 參考：{orphan_list}")
+            else:
+                messages.append("【步驟3】所有 VoicePrint 均有被 Speaker 參考")
+
+            # Step 4
+            relinked = report.get("step4_relinked_vp")
+            if relinked:
+                total = sum(len(v) for v in relinked.values())
+                sp_cnt = len(relinked)
+                messages.append(f"【步驟4】自動掛回 {total} 個 VoicePrint 至 {sp_cnt} 位 Speaker")
+
+            # 輸出
+            for msg in messages:
+                logger.info(msg)            # ✅ 對外採用 logger
+                print(msg)                  #    如果還想在 CLI 顯示，可保留
+
+            if report.get("success"):
+                logger.info("✅ 資料庫檢查與修復已完成")
+                print("\n✅ 資料庫檢查與修復已完成\n")
+            else:
+                logger.warning("⚠️ 資料庫檢查完成，但部分步驟失敗")
+                print("\n⚠️ 資料庫檢查完成，但部分步驟失敗\n")
+
+        except Exception as exc:
+            logger.exception("❌ 執行資料庫檢查與修復時發生錯誤")
+            print(f"❌ 執行資料庫檢查與修復時發生錯誤：{exc}")
+
 
 # ---------------------------------------------------------------------------
 # CLI (Command‑line Interface)
@@ -303,26 +299,9 @@ class SpeakerManagerCLI:
             print("❌ 名稱不可為空。")
             return
         if self.manager.update_speaker_name(sp_id, new_name):
-            print("✅ 名稱已更新。")
+            print(f"✅ 已更新語者名稱為：{new_name}")
         else:
-            print("❌ 更新失敗，請查看日誌。")
-
-    def _action_transfer(self) -> None:
-        src_raw = input("請輸入來源說話者序號或 ID: ")
-        src_id = self._resolve_id(src_raw)
-        dest_raw = input("請輸入目標說話者序號或 ID: ")
-        dest_id = self._resolve_id(dest_raw)
-        if not src_id or not dest_id or not (valid_uuid(src_id) and valid_uuid(dest_id)):
-            print("❌ 無效的來源或目標 ID。")
-            return
-        confirm = input("確定要轉移所有聲紋? (y/N): ").lower()
-        if confirm != "y":
-            print("已取消。")
-            return
-        if self.manager.transfer_voiceprints(src_id, dest_id):
-            print("✅ 聲紋已轉移。")
-        else:
-            print("❌ 轉移失敗，請查看日誌。")
+            print("❌ 更新失敗。")
 
     def _action_delete(self) -> None:
         raw = input("請輸入要刪除的說話者序號或 ID: ")
@@ -330,20 +309,50 @@ class SpeakerManagerCLI:
         if not sp_id or not valid_uuid(sp_id):
             print("❌ 無效的說話者 ID。")
             return
-        confirm = input("⚠️  此操作無法復原，確定刪除? (y/N): ").lower()
-        if confirm != "y":
-            print("已取消。")
+        confirm = input(f"⚠️ 警告：刪除操作不可逆，確定要刪除說話者 {sp_id}？(Y/n): ")
+        if confirm.lower() not in ["y", "yes"]:
+            print("已取消刪除操作。")
             return
         if self.manager.delete_speaker(sp_id):
             print("✅ 說話者已刪除。")
         else:
-            print("❌ 刪除失敗，請查看日誌。")
+            print("❌ 刪除失敗。")
+
+    def _action_transfer(self) -> None:
+        src_raw = input("請輸入來源說話者序號或 ID: ")
+        src_id = self._resolve_id(src_raw)
+        if not src_id or not valid_uuid(src_id):
+            print("❌ 無效的來源說話者 ID。")
+            return
+        dest_raw = input("請輸入目標說話者序號或 ID: ")
+        dest_id = self._resolve_id(dest_raw)
+        if not dest_id or not valid_uuid(dest_id):
+            print("❌ 無效的目標說話者 ID。")
+            return
+        if src_id == dest_id:
+            print("❌ 來源和目標說話者不能相同。")
+            return
+        confirm = input(
+            f"⚠️ 確定要將來源說話者 {src_id} 的所有聲紋轉移到目標說話者 {dest_id}？(Y/n): "
+        )
+        if confirm.lower() not in ["y", "yes"]:
+            print("已取消轉移操作。")
+            return
+        if self.manager.transfer_voiceprints(src_id, dest_id):
+            print("✅ 聲紋成功轉移。")
+        else:
+            print("❌ 轉移失敗。")
 
     def _action_cleanup(self) -> None:
-        self.manager.cleanup()
-        print("✅ 資料庫清理完成。")
+        confirm = input(f"⚠️ 是否確定執行資料庫檢查與修復？部分操作可能不可逆。(Y/n): ")
+        if confirm.lower() not in ["y", "yes"]:
+            print("已取消檢查與修復操作。")
+            return
+        self.manager.check_and_repair_database()
+        print("✅ 資料庫檢查與修復完成。\n")
 
     def run(self) -> None:
+        """開始運行命令列界面。"""
         actions = {
             "1": self._action_list,
             "2": self._action_view,
@@ -366,18 +375,9 @@ class SpeakerManagerCLI:
 # 入口點
 # ---------------------------------------------------------------------------
 
-def _build_weaviate_client() -> weaviate.WeaviateClient:
-    """建立 Weaviate 連線。"""
-    try:
-        client = weaviate.connect_to_local()
-        return client
-    except Exception as exc:
-        logger.error(f"連線 Weaviate 失敗: {exc}")
-        sys.exit(1)
-
 def main() -> None:
-    client = _build_weaviate_client()
-    manager = SpeakerManager(client)
+    """程序主入口點"""
+    manager = SpeakerManager()
     cli = SpeakerManagerCLI(manager)
     cli.run()
 

@@ -1,2 +1,15 @@
-[2025-05-13 23:33:41] [92mINFO[0m: 
-接收到停止信號
+[2025-05-16 18:33:55] [Voice_ID.identify] [92mINFO[0m: SpeechBrain 模型加載成功！
+[2025-05-16 18:33:55] [Voice_ID.identify] [92mINFO[0m: 成功連接到 Weaviate 資料庫！
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: 帥哥, 更新次數: 8, 餘弦距離: 0.2167
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: 帥哥, 更新次數: 1, 餘弦距離: 0.4611
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: n2, 更新次數: 1, 餘弦距離: 0.5021
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: noise, 更新次數: 3, 餘弦距離: 0.2688
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: noise, 更新次數: 2, 餘弦距離: 0.3459
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 比對 - 說話者: noise, 更新次數: 1, 餘弦距離: 0.3686
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: (更新) 聲紋ID 6b523e2b-7dae-49e8-b817-79fc8184db4a 已更新，新的更新次數: 4
+[2025-05-16 18:34:08] [Voice_ID.identify] [92mINFO[0m: 該音檔與說話者 noise 相符，且已更新嵌入檔案。
+[2025-05-16 18:34:08] [VoiceID.main] INFO: 片段 1 識別結果:  【speaker1_20250516-18_34_02_1 → 說話者 帥哥 	(聲音非常相似:0.2167)】  【speaker2_20250516-18_34_02_1 → 說話者 noise 	(已更新聲紋:0.2688)】
+[2025-05-16 18:34:08] [VoiceID.main] [92mINFO[0m: 片段 1 處理完成
+[2025-05-16 18:34:08] [VoiceID.main] [92mINFO[0m: 已儲存原始混合音訊：16K-model/Audios-16K-IDTF\mixed_audio_20250516-18_34_08.wav
+[2025-05-16 18:34:08] [VoiceID.main] [92mINFO[0m: 錄音結束，資源已清理
+[2025-05-16 18:34:08] [VoiceID.main] [92mINFO[0m: 處理完成，共產生 2 個分離後的音檔
