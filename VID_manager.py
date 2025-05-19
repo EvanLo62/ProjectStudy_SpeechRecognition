@@ -5,7 +5,7 @@
 
 版本：v1.1.0 
 作者：CYouuu
-最後更新：2025-05-16
+最後更新：2025-05-19
 
 功能摘要：
 -----------
@@ -193,14 +193,24 @@ class SpeakerManager:
                 orphan_list = ", ".join(str(v)[:8] for v in orphan_vps)
                 messages.append(f"【步驟3】{len(orphan_vps)} 個 VoicePrint 未被 Speaker 參考：{orphan_list}")
             else:
-                messages.append("【步驟3】所有 VoicePrint 均有被 Speaker 參考")
-
-            # Step 4
+                messages.append("【步驟3】所有 VoicePrint 均有被 Speaker 參考")            # Step 4
             relinked = report.get("step4_relinked_vp")
             if relinked:
                 total = sum(len(v) for v in relinked.values())
                 sp_cnt = len(relinked)
                 messages.append(f"【步驟4】自動掛回 {total} 個 VoicePrint 至 {sp_cnt} 位 Speaker")
+            
+            # 刪除的孤兒聲紋
+            deleted_orphans = report.get("step4_deleted_orphans", [])
+            if deleted_orphans:
+                messages.append(f"【步驟4】已刪除 {len(deleted_orphans)} 個無法確定歸屬的孤兒聲紋")
+                if len(deleted_orphans) <= 10:
+                    orphan_list = ", ".join(str(v)[:8] for v in deleted_orphans)
+                    messages.append(f"刪除的聲紋 ID: {orphan_list}")
+                else:
+                    messages.append(f"(聲紋數量過多，僅顯示前10個)")
+                    orphan_list = ", ".join(str(v)[:8] for v in deleted_orphans[:10])
+                    messages.append(f"刪除的聲紋 ID: {orphan_list}...")
 
             # 輸出
             for msg in messages:

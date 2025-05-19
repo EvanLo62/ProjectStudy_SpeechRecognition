@@ -123,11 +123,11 @@ class CustomFormatter(logging.Formatter):
         return result
 
 def get_logger(
-    name: str = "speaker_system",
+    name: str = "test",
     log_file: Optional[str] = "system_output.log",
     console_level: int = logging.INFO,
     file_level: int = logging.DEBUG,
-    append_mode: bool = False
+    append_mode: bool = True
 ) -> logging.Logger:
     """
     獲取或創建一個配置好的日誌器

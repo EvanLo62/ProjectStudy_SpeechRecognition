@@ -3,9 +3,9 @@
 語者與聲紋資料庫接口 (Speaker and Voiceprint Database Interface)
 ===============================================================================
 
-版本：v1.0.0 
+版本：v1.0.1 
 作者：CYouuu
-最後更新：2025-05-15
+最後更新：2025-05-19
 
 主要功能接口：
 -----------
@@ -400,7 +400,7 @@ class DatabaseService:
     
     def delete_speaker(self, speaker_id: str) -> bool:
         """
-        刪除語者。
+        刪除語者，同時刪除該語者底下的所有聲紋。
         
         Args:
             speaker_id: 語者 ID
@@ -412,10 +412,35 @@ class DatabaseService:
             if not valid_uuid(speaker_id):
                 logger.error(f"無效的語者 ID 格式: {speaker_id}")
                 return False
+            
+            # 1. 獲取語者的所有聲紋
+            speaker_collection = self.client.collections.get(self.SPEAKER_CLASS)
+            speaker_obj = speaker_collection.query.fetch_object_by_id(
+                uuid=speaker_id,
+                return_properties=["name", "voiceprint_ids"]
+            )
+            
+            if not speaker_obj:
+                logger.error(f"找不到語者 (ID: {speaker_id})")
+                return False
                 
-            collection = self.client.collections.get(self.SPEAKER_CLASS)
-            collection.data.delete_by_id(uuid=speaker_id)
-            logger.info(f"已刪除語者 {speaker_id}")
+            speaker_name = speaker_obj.properties.get("name", "未命名")
+            voiceprint_ids = speaker_obj.properties.get("voiceprint_ids", [])
+            
+            # 2. 刪除語者的所有聲紋
+            deleted_count = 0
+            voiceprint_collection = self.client.collections.get(self.VOICEPRINT_CLASS)
+            for vp_id in voiceprint_ids:
+                try:
+                    voiceprint_collection.data.delete_by_id(uuid=vp_id)
+                    deleted_count += 1
+                except Exception as vp_exc:
+                    logger.error(f"刪除聲紋 {vp_id} 時發生錯誤: {vp_exc}")
+            
+            # 3. 刪除語者本身
+            speaker_collection.data.delete_by_id(uuid=speaker_id)
+            
+            logger.info(f"已刪除語者 {speaker_name} (ID: {speaker_id}) 及其 {deleted_count} 個聲紋")
             return True
         except Exception as exc:
             logger.error(f"刪除說話者時發生錯誤: {exc}")
@@ -992,7 +1017,7 @@ class DatabaseService:
             "step1_missing_vp_count": 0,
             "step2_error_vp_ids": [],
             "step3_unreferenced_vp_ids": [],
-            "step4_relinked_vp": {},      # ❶ 新增報表欄位
+            "step4_relinked_vp": {},      
             "success": False
         }
 
@@ -1085,9 +1110,7 @@ class DatabaseService:
             all_voiceprints = voice_print_coll.query.fetch_objects()
             all_vp_ids = {str(obj.uuid) for obj in all_voiceprints.objects}
             orphan_vp_ids = all_vp_ids.difference(all_speaker_vp_ids)
-            report["step3_unreferenced_vp_ids"] = list(orphan_vp_ids)
-
-            # === 步驟 4：能判斷歸屬者，自動掛回 ==============================
+            report["step3_unreferenced_vp_ids"] = list(orphan_vp_ids)            # === 步驟 4：能判斷歸屬者，自動掛回，無法確定歸屬者，刪除 ==========
             if orphan_vp_ids:
                 # 快速對照：speaker_name -> (speaker_uuid, 現有 vp set)
                 name_to_sp = {
@@ -1096,15 +1119,22 @@ class DatabaseService:
                     for sp_uuid, name in speaker_id_to_name.items()
                 }
                 pending_updates = defaultdict(set)
-
+                deleted_orphans = []
+                
                 for vp_obj in all_voiceprints.objects:
                     vp_id = str(vp_obj.uuid)
                     if vp_id not in orphan_vp_ids:
                         continue
 
                     sp_name = vp_obj.properties.get("speaker_name")
+                    # 無法確定歸屬的情況，直接刪除
                     if not sp_name or sp_name not in name_to_sp:
-                        continue                                # 無法確定歸屬
+                        try:
+                            voice_print_coll.data.delete_by_id(uuid=vp_id)
+                            deleted_orphans.append(vp_id)
+                        except Exception as del_exc:
+                            logger.error(f"刪除孤兒聲紋 {vp_id[:8]} 時發生錯誤: {del_exc}")
+                        continue
 
                     sp_uuid, owned_vps = name_to_sp[sp_name]
                     # 交叉驗證 reference（可略過以提升速度）
@@ -1129,6 +1159,7 @@ class DatabaseService:
 
                 # 報表
                 report["step4_relinked_vp"] = {k: list(v) for k, v in pending_updates.items()}
+                report["step4_deleted_orphans"] = deleted_orphans
 
             report["success"] = True
             return report

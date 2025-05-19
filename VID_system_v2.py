@@ -146,7 +146,7 @@ OUTPUT_DIR = "16K-model/Audios-16K-IDTF"
 IDENTIFIED_DIR = "16K-model/Identified-Speakers"
 
 # 初始化日誌系統
-logger = get_logger("VoiceID.main", "system_output.log", append_mode=True)
+logger = get_logger("VoiceID.system", "system_output.log", append_mode=True)
 
 
 # ================== 語者分離部分 ======================

@@ -119,8 +119,11 @@ def _print(*args, **kwargs) -> None:
     # 因此在這裡做一個檢查和默認值處理
     global logger
     if 'logger' not in globals() or logger is None:
-        from VID_logger import get_logger
-        logger = get_logger("speaker_identify")
+        logger = get_logger(
+            name="Voice_ID.identify", 
+            log_file="system_output.log", 
+            append_mode=True
+        )
         
     if _ENABLE_OUTPUT:
         # 將多個參數轉換為單個字符串
@@ -182,7 +185,11 @@ logging.getLogger("speechbrain").setLevel(logging.ERROR)
 from VID_logger import get_logger
 
 # 創建模組專屬日誌器
-logger = get_logger("Voice_ID.identify")
+logger = get_logger(
+    name="Voice_ID.identify", 
+    log_file="system_output.log", 
+    append_mode=True
+)
 
 # 載入 SpeechBrain 語音辨識模型
 from speechbrain.inference import SpeakerRecognition
