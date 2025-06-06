@@ -41,7 +41,7 @@ import warnings
 import logging
 import subprocess
 
-import sync_npy_username  # (保留) 用來呼叫 ffmpeg
+import archive.deprecated.sync_npy_username as sync_npy_username  # (保留) 用來呼叫 ffmpeg
 
 # 隱藏多餘的警告和日誌
 warnings.filterwarnings("ignore")

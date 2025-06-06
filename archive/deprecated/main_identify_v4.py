@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Tuple, List, Dict, Optional, Union, Any
 import weaviate  # type: ignore
 from weaviate.classes.query import MetadataQuery # type: ignore
-import sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
+import archive.deprecated.sync_npy_username as sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
 
 # 設定 httpx 的日誌層級為 WARNING 或更高，以關閉 INFO 層級的 HTTP 請求日誌
 logging.getLogger("httpx").setLevel(logging.WARNING)

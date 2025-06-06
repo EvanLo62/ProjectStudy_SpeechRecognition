@@ -8,7 +8,7 @@ from scipy.spatial.distance import cosine
 from scipy.signal import resample_poly
 import warnings
 import logging
-import sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
+import archive.deprecated.sync_npy_username as sync_npy_username  # 用來呼叫 ffmpeg 或檢查更新
 
 # 隱藏多餘的警告與日誌
 warnings.filterwarnings("ignore")

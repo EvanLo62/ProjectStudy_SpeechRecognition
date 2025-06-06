@@ -1,4 +1,4 @@
-venv_speech
+.venv
 .env
 audioFile
 output_log.txt

@@ -1,0 +1,56 @@
+[project]
+name = "Voice_ID"
+version = "0.1.0"
+description = "語者識別與聲紋管理系統"
+readme = "README.md"
+requires-python = ">=3.12.6"
+authors = [
+    { name = "CYouuu", email = "your.email@example.com" }
+]
+dependencies = [
+    # 核心音訊處理與深度學習套件
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    "speechbrain==1.0.2",
+    "numpy==2.2.5",
+    "scipy==1.15.0",
+    "soundfile==0.13.0",
+    
+    # 向量資料庫
+    "weaviate-client==4.5.3",
+    
+    # 音訊處理相關
+    "pydub==0.25.1",
+    
+    # 相依套件
+    "huggingface-hub==0.27.1",
+    "HyperPyYAML==1.2.2",
+    "PyYAML==6.0.2",
+    "tqdm==4.67.1",
+    "typing_extensions==4.12.2",
+    "filelock==3.16.1",
+    "fsspec==2024.12.0",
+    
+    # 其他您可能需要的工具
+    "pyaudio>=0.2.12",  # 無明確版本，保留為最低版本要求
+    "noisereduce>=2.0.0",  # 無明確版本，保留為最低版本要求
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.10.0",
+    "mypy>=1.0.0",
+]
+
+[tool.pytest]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

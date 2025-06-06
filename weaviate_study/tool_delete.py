@@ -587,7 +587,7 @@ def handle_delete_speaker(client: weaviate.WeaviateClient) -> None:
             print(f"聲紋數量: {speaker['voiceprint_count']}")
             
             # 獲取聲紋資料以顯示更多細節
-            if speaker['voiceprint_count'] > 0:
+            if (speaker['voiceprint_count'] > 0):
                 voiceprints = get_speaker_voiceprints(client, speaker["uuid"])
                 display_voiceprints(voiceprints)
             
@@ -706,10 +706,11 @@ def show_menu() -> str:
     print("2. 搜尋說話者")
     print("3. 刪除說話者及其所有聲紋資料")
     print("4. 刪除特定聲紋資料")
+    print("5. 依聲紋 UUID 刪除聲紋")  # 新增選項
     print("0. 退出程式")
     print("-" * 50)
     
-    return input("請選擇操作 (0-4): ").strip()
+    return input("請選擇操作 (0-5): ").strip()
 
 
 def main() -> None:
@@ -749,7 +750,17 @@ def main() -> None:
             elif choice == "4":
                 # 刪除特定聲紋資料
                 handle_delete_single_voiceprint(client)
-                
+            elif choice == "5":
+                # 依聲紋 UUID 刪除聲紋（簡化版，不查詢說話者）
+                voiceprint_id = input("請輸入要刪除的聲紋 UUID: ").strip()
+                if not voiceprint_id:
+                    print("聲紋 UUID 不能為空！")
+                else:
+                    success = delete_voiceprint_simple(client, voiceprint_id)
+                    if success:
+                        print("刪除操作完成！")
+                    else:
+                        print("刪除操作失敗，請檢查 UUID 是否正確或查看錯誤訊息。")
             else:
                 print("無效的選項，請重新選擇！")
             
@@ -767,6 +778,73 @@ def main() -> None:
         if client:
             client.close()
             print("已關閉 Weaviate 連接")
+
+
+def delete_voiceprint_by_id(client: weaviate.WeaviateClient, voiceprint_id: str) -> bool:
+    """
+    直接刪除指定聲紋，並自動從對應說話者的聲紋列表移除該聲紋 ID。
+
+    Args:
+        client: Weaviate 客戶端連接
+        voiceprint_id: 要刪除的聲紋 UUID
+    
+    Returns:
+        bool: 操作是否成功
+    """
+    try:
+        voice_print_collection = client.collections.get("VoicePrint")
+        # 只查詢 speaker_name
+        voiceprint_obj = voice_print_collection.query.fetch_object_by_id(
+            uuid=voiceprint_id,
+            return_properties=["speaker_name"]
+        )
+        if not voiceprint_obj:
+            print(f"找不到 ID 為 {voiceprint_id} 的聲紋資料")
+            return False
+        speaker_name = voiceprint_obj.properties.get("speaker_name")
+        if not speaker_name:
+            print(f"聲紋資料未包含說話者名稱，無法自動移除聲紋 ID")
+            return False
+        # 反查說話者 UUID
+        speakers = search_speakers_by_name(client, speaker_name)
+        if not speakers:
+            print(f"找不到名稱為 '{speaker_name}' 的說話者，無法自動移除聲紋 ID")
+            return False
+        # 若有多個同名，只移除第一個
+        speaker_id = speakers[0]["uuid"]
+        # 執行聲紋刪除
+        success = delete_voiceprint(client, voiceprint_id)
+        if not success:
+            return False
+        # 從說話者的聲紋列表移除該聲紋 ID
+        remove_voiceprint_from_speaker(client, speaker_id, voiceprint_id)
+        print(f"已完成聲紋 {voiceprint_id} 的刪除與說話者列表更新。")
+        return True
+    except Exception as e:
+        print(f"刪除指定聲紋時發生錯誤: {str(e)}")
+        print(f"詳細錯誤: {traceback.format_exc()}")
+        return False
+
+
+def delete_voiceprint_simple(client: weaviate.WeaviateClient, voiceprint_id: str) -> bool:
+    """
+    只根據 UUID 直接刪除 VoicePrint，不查詢任何屬性，也不處理說話者關聯。
+
+    Args:
+        client: Weaviate 客戶端連接
+        voiceprint_id: 要刪除的聲紋 UUID
+    Returns:
+        bool: 是否成功刪除
+    """
+    try:
+        voice_print_collection = client.collections.get("VoicePrint")
+        voice_print_collection.data.delete_by_id(voiceprint_id)
+        print(f"已成功刪除 VoicePrint (ID: {voiceprint_id})")
+        return True
+    except Exception as e:
+        print(f"刪除 VoicePrint 時發生錯誤: {str(e)}")
+        print(f"詳細錯誤: {traceback.format_exc()}")
+        return False
 
 
 if __name__ == "__main__":
